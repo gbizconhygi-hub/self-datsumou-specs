@@ -19,6 +19,7 @@
 - ログの保持・AI学習データの取り扱い
 - エスカレーション通知の土台（ChatWork/SMS）
 - ID採番ルール、AIモデルバージョン管理
+- **基本DBテーブル・カラムの詳細定義は `PHASE_00_DB_CORE.md` / `db_fields.yaml` を正とし、本書では概念レベルの前提のみ扱う**
 
 これにより、後続フェーズが機能仕様に集中できる環境を作る。
 
@@ -37,11 +38,11 @@
 
 | サブドメイン | 物理ディレクトリ |
 | --- | --- |
-| help.self-datsumou.net | /self-datsumou.net/public_html/help |
-| line.self-datsumou.net | /self-datsumou.net/public_html/line |
-| shop.self-datsumou.net | /self-datsumou.net/public_html/shop |
-| ai.self-datsumou.net | /self-datsumou.net/public_html/ai |
-| assets.self-datsumou.net | /self-datsumou.net/public_html/assets |
+| [help.self-datsumou.net](http://help.self-datsumou.net/) | /self-datsumou.net/public_html/help |
+| [line.self-datsumou.net](http://line.self-datsumou.net/) | /self-datsumou.net/public_html/line |
+| [shop.self-datsumou.net](http://shop.self-datsumou.net/) | /self-datsumou.net/public_html/shop |
+| [ai.self-datsumou.net](http://ai.self-datsumou.net/) | /self-datsumou.net/public_html/ai |
+| [assets.self-datsumou.net](http://assets.self-datsumou.net/) | /self-datsumou.net/public_html/assets |
 
 ### 2.3 .env の配置（確定）
 
@@ -52,24 +53,19 @@
 ### 2.4 Owner / Shop（オーナーと店舗）
 
 - Owner（加盟店主）1：N Shop（店舗）
-    
-    → オーナー＝上位、店舗＝下位
-    
+→ オーナー＝上位、店舗＝下位
 - ログインについて：
     - オーナー・店舗スタッフは同ID共有前提
-        
-        → ロールは `SHOP` で統一
-        
+    → ロールは `SHOP` で統一
     - 本部スタッフは同ID共有前提
-        
-        → ロールは `HQ` で統一
-        
+    → ロールは `HQ` で統一
 
 ### 2.5 STORES API キーの前提
 
 - STORES API キーは **店舗単位で異なる**
 - エンドポイントURLは全店舗共通
-- 既存テーブル：`shop_secret` に店舗別で保持（.env には置かない）
+- 店舗別の STORES API キーは、**`shop_secrets` テーブルのKV形式**（例：`k='STORES_API_KEY'`）で保持し、`.env` には置かない
+（詳細なスキーマは `PHASE_00_DB_CORE.md` を参照）
 
 ### 2.6 RemoteLock の扱い
 
@@ -103,7 +99,7 @@
 | 本部用ChatWorkルームID（用途別） | 店舗情報とは無関係なため.envに集約 |
 | STORES共通設定（BaseURL・Timeout等） | 全体共通・非機密 |
 
-※ STORES API **キーは `.env` に入れない**（店舗ごとに異なるため）
+※ STORES API **キーは `.env` に入れない**（店舗ごとに異なるため。`shop_secrets` に保持）
 
 ### 3.3 DBで管理するもの（運用値）
 
@@ -111,6 +107,9 @@
 - システム全体パラメータ（通知回数・閾値）
 - フィーチャーフラグ
 - 店舗別／オーナー別の設定値
+
+> 実際のテーブル・カラム定義は PHASE_00_DB_CORE.md / db_fields.yaml を正とし、本書では「何をDB側に持つか」の方針のみを定義する。
+> 
 
 ### 3.4 権限ロール（シンプル運用）
 
@@ -161,11 +160,23 @@
 ## 6. フィーチャーフラグ
 
 - 目的：機能の段階的リリース、店舗ごとのON/OFF
-- 全体フラグ：`system_config`
-- 店舗別フラグ：`shop_config`
-- キー例：
-    - `feature_ai_tutorial_enabled`
-    - `feature_auto_notification_enabled`
+
+### 6.1 管理の考え方
+
+- フィーチャーフラグは **「スコープ付きパラメータ」** として管理する。
+    - 全体フラグ → scope=`global`
+    - 店舗別フラグ → scope=`shop`, shop_id をキーに含める
+- 実際の保持テーブル（例：`sys_params` のようなパラメータストア）は **Phase1（SYS_CORE）で定義** し、
+Phase0ではテーブル名や物理構造を固定しない。
+
+### 6.2 キー例（概念）
+
+- `feature_ai_tutorial_enabled`
+- `feature_auto_notification_enabled`
+- `feature_owner_portal_v2_enabled`
+
+> 実装では「キー名＋スコープ＋値（bool/int/json）」の形式で管理し、テーブル定義は PHASE_01 で確定させる。
+> 
 
 ---
 
@@ -223,8 +234,8 @@
 
 ### 9.2 店舗別チューニング
 
-- `shop_config` に店舗チューニング値を保持
-- 本部が代理編集する前提
+- 店舗別のAIチューニング値は、Phase1で定義するパラメータテーブル（例：`sys_params` の shop スコープ）で管理する想定。
+- 本部が代理編集する前提。
 
 ### 9.3 ログへの記録
 
@@ -247,6 +258,8 @@ AIログには必ず：
 保持：短〜中期間（例：180日）
 
 形式：個人情報保持あり
+
+※ 具体的な保持期間・テーブル設計は Phase1/2 で詳細定義する。
 
 ### 10.2 学習データ（個人情報マスク済み）
 
@@ -290,14 +303,14 @@ AIの判断結果（カテゴリ＋自信度など）
 
 ### 11.4 ルームIDの保持場所
 
-- **オーナー用ChatWorkルームID： `owner_secret` または `owner_config` に保持**
+- **オーナー用ChatWorkルームID： `owners.chatwork_room_id` に保持する**
 - 本部用ChatWorkルームID：`.env` に用途別で保持
 
 ### 11.5 通知ルーティング
 
 1. shop_id を受け取り
 2. owner_id に辿る
-3. owner_secret などから room_id を取得
+3. `owners.chatwork_room_id` から room_id を取得
 4. ChatWorkに通知
 
 ---
@@ -306,7 +319,7 @@ AIの判断結果（カテゴリ＋自信度など）
 
 ### 12.1 STORES
 
-- 認証：`shop_secret.stores_api_key`
+- 認証：`shop_secrets` テーブルのKV（例：`k='STORES_API_KEY'`）から店舗別 STORES API キーを取得
 - 共通設定：`.env` の `STORES_API_BASE_URL`
 - 接続レイヤー：共通クライアント `StoresClient`
 
@@ -317,7 +330,7 @@ AIの判断結果（カテゴリ＋自信度など）
 
 ### 12.3 ChatWork
 
-- 加盟店通知：ownerごとの room_id へ通知
+- 加盟店通知：ownerごとの room_id（`owners.chatwork_room_id`）へ通知
 - 本部通知：`.env` の用途別 room_id へ通知
 
 ### 12.4 LINE
@@ -332,38 +345,33 @@ AIの判断結果（カテゴリ＋自信度など）
 
 ---
 
-## 13. データ構造（基盤部分）
+## 13. データ構造（基盤部分の考え方）
 
-### 13.1 system_config
+- 実際のテーブル／カラム定義は **`PHASE_00_DB_CORE.md` / `db_fields.yaml` を正** とし、本節では「どの種類の情報をどのレイヤーで持つか」の考え方のみ整理する。
 
-| カラム | 説明 |
-| --- | --- |
-| config_key | 主キー |
-| config_value | 値 |
-| value_type | string/int/bool/json |
-| description | 意味 |
-| updated_at | 更新日時 |
-| updated_by | HQユーザーID |
+### 13.1 システム全体パラメータ（グローバル）
 
-### 13.2 shop_config（店舗別設定）
+- 通知回数・閾値、AIデフォルト設定、全体フィーチャーフラグなどを管理する。
+- Phase1（SYS_CORE）で定義するパラメータテーブルの **scope=`global`** として保持する想定。
 
-同上＋`shop_id`。
+### 13.2 店舗別パラメータ
 
-### 13.3 shop_secret（店舗別機密）
+- 店舗別AIチューニング、店舗別機能ON/OFFなどを管理する。
+- 同じくパラメータテーブルの **scope=`shop`, shop_id** で管理する想定。
+- ON/OFF で足りない項目は `options_master` + `shop_options`（DB_CORE参照）で扱う。
 
-| カラム | 説明 |
-| --- | --- |
-| shop_id | 店舗ID |
-| stores_api_key | 店舗別 STORES APIキー |
-| updated_at | 更新日時 |
+### 13.3 店舗別機密情報
 
-### 13.4 owner_secret（オーナー機密）
+- RemoteLOCK親アカウント、STORESログイン情報、各種APIキーなど、オーナーに開示しない情報は
+    
+    **`shop_secrets` テーブルに KV 形式で保持** する（例：`k='REMOTELOCK_PARENT_EMAIL'` 等）。
+    
+- 値は暗号化して保存し、復号はサーバ側ロジックのみで行う。
 
-| カラム | 説明 |
-| --- | --- |
-| owner_id | オーナーID |
-| chatwork_room_id | オーナー用ChatWorkルームID |
-| updated_at | 更新日時 |
+### 13.4 オーナー別通知情報
+
+- オーナー用ChatWorkルームIDなどの通知先情報は **`owners.chatwork_room_id` をSoR** とする。
+- 将来、通知先が増える場合は Phase1 以降で拡張テーブルを追加する。
 
 ---
 
@@ -373,7 +381,7 @@ AIの判断結果（カテゴリ＋自信度など）
 
 - 各フェーズで新規テーブル・カラムが必要になった場合
     
-    → そのフェーズの仕様書（PHASE_xx_*.md）に **必ずDDLを明記**
+    → そのフェーズの仕様書（`PHASE_xx_*.md`）に **必ずDDLを明記**
     
 
 ### 14.2 実行は最終ZIP出力時に**まとめて一括**
@@ -381,8 +389,13 @@ AIの判断結果（カテゴリ＋自信度など）
 - v1.4リリース時点で
     - `db_migration_v1_4.sql`（フルセット）
     - `db_migration_v1_4_diff.sql`（差分用）
+- を ChatGPT が一括生成し、あなたが prod に適用する。
 
-を ChatGPT が一括生成し、あなたが prod に適用する。
+> Phase0 で確定した PHASE_00_DB_CORE.md / db_fields.yaml の内容を前提とし、
+> 
+> 
+> 後続フェーズは「追加分」だけをマイグレーションに乗せる。
+> 
 
 ---
 
@@ -392,3 +405,4 @@ AIの判断結果（カテゴリ＋自信度など）
 - SMS送信の条件（重要案件の定義）
 - RemoteLock参照インターフェースのI/O仕様
 - AI-INBOXとの統合方針（返信URL部分）
+- パラメータテーブル（例：`sys_params`）の具体スキーマ設計（Phase1 SYS_COREで確定）
