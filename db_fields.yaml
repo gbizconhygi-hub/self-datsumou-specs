@@ -1,0 +1,939 @@
+# db_fields.yaml
+# Phase0 基本DBコア（オーナー／店舗／契約・料金／備品／リンク／売上）
+
+tables:
+
+  owners:
+    comment: "加盟店オーナーおよび本部（HQ）マスタ。本部も1オーナーとして登録する。"
+    columns:
+      id:
+        type: bigint unsigned
+        nullable: false
+        extra: auto_increment
+        key: PRI
+        comment: "DB主キー（内部参照用）"
+      owner_code:
+        type: varchar(32)
+        nullable: false
+        key: UNI
+        comment: "加盟店コード（業務用の不変識別子）"
+      owner_type:
+        type: varchar(16)
+        nullable: false
+        default: "franchisee"
+        comment: "オーナー種別: hq=本部直営, franchisee=加盟店, other=その他"
+      owner_status:
+        type: varchar(16)
+        nullable: false
+        default: "active"
+        comment: "状態: active=稼働中, suspended=一時停止, closed=契約終了"
+      contract_holder_name:
+        type: varchar(255)
+        nullable: false
+        comment: "契約者名義（契約書上の名義）"
+      contract_type:
+        type: varchar(16)
+        nullable: false
+        default: "corporate"
+        comment: "契約区分: corporate=法人, individual=個人"
+      contract_zip:
+        type: varchar(16)
+        nullable: true
+        comment: "契約住所－郵便番号"
+      contract_addr_line1:
+        type: varchar(255)
+        nullable: true
+        comment: "契約住所－都道府県・市区町村（自動入力）"
+      contract_addr_line2:
+        type: varchar(255)
+        nullable: true
+        comment: "契約住所－番地・建物等（以降）"
+      contract_addr_building:
+        type: varchar(255)
+        nullable: true
+        comment: "契約住所－建物名"
+      contract_phone:
+        type: varchar(32)
+        nullable: true
+        comment: "契約者電話番号"
+      corporate_number:
+        type: varchar(32)
+        nullable: true
+        comment: "法人番号（法人の場合）"
+      representative_name:
+        type: varchar(255)
+        nullable: true
+        comment: "代表者氏名"
+      representative_kana:
+        type: varchar(255)
+        nullable: true
+        comment: "代表者氏名（カナ）"
+      representative_birthdate:
+        type: date
+        nullable: true
+        comment: "代表者生年月日"
+      representative_email:
+        type: varchar(255)
+        nullable: true
+        comment: "代表者メールアドレス"
+      mailing_zip:
+        type: varchar(16)
+        nullable: true
+        comment: "郵送先－郵便番号"
+      mailing_addr_line1:
+        type: varchar(255)
+        nullable: true
+        comment: "郵送先－都道府県・市区町村（自動入力）"
+      mailing_addr_line2:
+        type: varchar(255)
+        nullable: true
+        comment: "郵送先－番地・建物等（以降）"
+      mailing_addr_building:
+        type: varchar(255)
+        nullable: true
+        comment: "郵送先－建物名"
+      mailing_attention:
+        type: varchar(255)
+        nullable: true
+        comment: "郵送先宛名（○○御中／○○様）"
+      mailing_phone:
+        type: varchar(32)
+        nullable: true
+        comment: "郵送先電話番号"
+      chatwork_room_id:
+        type: varchar(64)
+        nullable: true
+        comment: "オーナー用ChatWorkルームID（通知先。複数店舗で共通）"
+      preferred_contact:
+        type: varchar(16)
+        nullable: false
+        default: "chatwork"
+        comment: "通知手段の希望: chatwork / email / both"
+      billing_email:
+        type: varchar(255)
+        nullable: true
+        comment: "請求書送付先メールアドレス"
+      post0_contract:
+        type: tinyint(1)
+        nullable: false
+        default: 0
+        comment: "Post0契約フラグ: 1=Post0契約あり, 0=なし"
+      notes:
+        type: text
+        nullable: true
+        comment: "オーナーに関する補足メモ（本部用）"
+      is_profile_complete:
+        type: tinyint(1)
+        nullable: false
+        default: 0
+        comment: "オーナープロフィール入力完了フラグ: 1=完了, 0=未完了"
+      created_at:
+        type: datetime
+        nullable: false
+        default: current_timestamp
+        comment: "登録日時"
+      updated_at:
+        type: datetime
+        nullable: false
+        default: current_timestamp
+        on_update: current_timestamp
+        comment: "更新日時"
+
+  owner_contacts:
+    comment: "オーナーごとの運営担当者連絡先（ChatWorkメンション用）"
+    columns:
+      id:
+        type: bigint unsigned
+        nullable: false
+        extra: auto_increment
+        key: PRI
+        comment: "DB主キー"
+      owner_id:
+        type: bigint unsigned
+        nullable: false
+        key: MUL
+        comment: "紐づくオーナーID（owners.id）"
+      role:
+        type: varchar(32)
+        nullable: false
+        default: "other"
+        comment: "担当区分: manager=責任者, accounting=経理, operations=運営, other=その他"
+      display_order:
+        type: int unsigned
+        nullable: false
+        default: 1
+        comment: "表示順（1〜。UI側で最大5件まで制御）"
+      name:
+        type: varchar(255)
+        nullable: false
+        comment: "担当者氏名"
+      kana:
+        type: varchar(255)
+        nullable: true
+        comment: "担当者氏名（カナ）"
+      email:
+        type: varchar(255)
+        nullable: true
+        comment: "担当者メールアドレス"
+      phone:
+        type: varchar(32)
+        nullable: true
+        comment: "担当者電話番号"
+      chatwork_id:
+        type: varchar(64)
+        nullable: false
+        comment: "ChatWork ID（メンション用）"
+      is_active:
+        type: tinyint(1)
+        nullable: false
+        default: 1
+        comment: "在任フラグ: 1=現役, 0=退任"
+      created_at:
+        type: datetime
+        nullable: false
+        default: current_timestamp
+        comment: "登録日時"
+      updated_at:
+        type: datetime
+        nullable: false
+        default: current_timestamp
+        on_update: current_timestamp
+        comment: "更新日時"
+
+  shops:
+    comment: "店舗マスタ。本部直営・FC店舗いずれも含む。外部連携はcodeで行う。"
+    columns:
+      id:
+        type: bigint unsigned
+        nullable: false
+        extra: auto_increment
+        key: PRI
+        comment: "DB主キー（内部参照用）"
+      code:
+        type: varchar(32)
+        nullable: false
+        key: UNI
+        comment: "店舗コード（業務用不変識別子。URL・メールID等で利用）"
+      owner_id:
+        type: bigint unsigned
+        nullable: false
+        key: MUL
+        comment: "オーナーID（owners.id）"
+      merchant_public_id:
+        type: varchar(64)
+        nullable: true
+        key: MUL
+        comment: "STORES予約のmerchant_public_id（売上CSVとの紐付けキー）"
+      name:
+        type: varchar(255)
+        nullable: false
+        comment: "店舗名（本部のみ編集）"
+      region_name:
+        type: varchar(255)
+        nullable: true
+        comment: "地域名（例: 名古屋駅前, 金山など）"
+      contract_date:
+        type: date
+        nullable: true
+        comment: "本部との契約日（店舗単位）"
+      open_date:
+        type: date
+        nullable: true
+        comment: "店舗オープン日"
+      shop_status:
+        type: varchar(16)
+        nullable: false
+        default: "preparing"
+        comment: "状態: preparing=準備中, open=営業中, closed=閉店済"
+      address_zip:
+        type: varchar(16)
+        nullable: true
+        comment: "店舗住所－郵便番号"
+      address_line1:
+        type: varchar(255)
+        nullable: true
+        comment: "店舗住所－都道府県・市区町村（自動入力）"
+      address_line2:
+        type: varchar(255)
+        nullable: true
+        comment: "店舗住所－番地・建物等（以降）"
+      address_building:
+        type: varchar(255)
+        nullable: true
+        comment: "店舗住所－建物名"
+      phone:
+        type: varchar(32)
+        nullable: true
+        comment: "店舗電話番号"
+      shop_email:
+        type: varchar(255)
+        nullable: true
+        comment: "店舗代表メール（問い合わせ窓口）"
+      remotelock_child_email:
+        type: varchar(255)
+        nullable: true
+        comment: "RemoteLOCK子アカウントのログインメール（オーナー閲覧用）"
+      business_hours:
+        type: varchar(255)
+        nullable: true
+        comment: "営業時間表示用文字列（初回は加盟店入力→以後は本部編集）"
+      stores_public_url:
+        type: varchar(512)
+        nullable: true
+        comment: "STORES予約ページURL"
+      notes:
+        type: text
+        nullable: true
+        comment: "店舗に関する一般的な備考（本部・加盟店共通メモ）"
+      billing_notes:
+        type: text
+        nullable: true
+        comment: "請求書に表示する備考（本部用）"
+      royalty_type:
+        type: varchar(16)
+        nullable: false
+        default: "flat"
+        comment: "ロイヤリティ方式: flat=定額, percent=売上連動, mixed=定額+％"
+      royalty_flat:
+        type: int unsigned
+        nullable: true
+        comment: "ロイヤリティ定額額（円）。royalty_type=flat/mixedのとき有効。"
+      royalty_percent:
+        type: decimal(5,2)
+        nullable: true
+        comment: "ロイヤリティ率（％）。例: 5.00=5%。royalty_type=percent/mixedで使用。"
+      created_at:
+        type: datetime
+        nullable: false
+        default: current_timestamp
+        comment: "登録日時"
+      updated_at:
+        type: datetime
+        nullable: false
+        default: current_timestamp
+        on_update: current_timestamp
+        comment: "更新日時"
+
+  shop_secrets:
+    comment: "店舗ごとの機密情報（ログインID・パスワード・APIキー等）を暗号化して保持するKVストア"
+    columns:
+      id:
+        type: bigint unsigned
+        nullable: false
+        extra: auto_increment
+        key: PRI
+        comment: "DB主キー"
+      shop_id:
+        type: bigint unsigned
+        nullable: false
+        key: MUL
+        comment: "店舗ID（shops.id）"
+      k:
+        type: varchar(128)
+        nullable: false
+        key: MUL
+        comment: "キー名（例: REMOTELOCK_PARENT_EMAIL, REMOTELOCK_API_KEY, STORES_LOGIN_ID）"
+      v_enc:
+        type: text
+        nullable: false
+        comment: "暗号化済み値"
+      updated_at:
+        type: datetime
+        nullable: false
+        default: current_timestamp
+        on_update: current_timestamp
+        comment: "更新日時"
+
+  options_master:
+    comment: "店舗オプション種別マスタ。本部が自由に増やせるON/OFF項目。"
+    columns:
+      id:
+        type: int unsigned
+        nullable: false
+        extra: auto_increment
+        key: PRI
+        comment: "DB主キー"
+      option_code:
+        type: varchar(64)
+        nullable: false
+        key: UNI
+        comment: "オプションコード（例: camera_safie, bgm_usen, net_usen）"
+      option_name:
+        type: varchar(255)
+        nullable: false
+        comment: "オプション名（画面表示用）"
+      description:
+        type: text
+        nullable: true
+        comment: "説明文（運用ルールなど）"
+      default_value:
+        type: tinyint(1)
+        nullable: false
+        default: 0
+        comment: "デフォルト値: 1=ON, 0=OFF"
+      editable_by_store:
+        type: tinyint(1)
+        nullable: false
+        default: 0
+        comment: "加盟店側で編集可能か: 1=可能, 0=本部のみ。Phase0では原則0運用。"
+      created_at:
+        type: datetime
+        nullable: false
+        default: current_timestamp
+        comment: "登録日時"
+      updated_at:
+        type: datetime
+        nullable: false
+        default: current_timestamp
+        on_update: current_timestamp
+        comment: "更新日時"
+
+  shop_options:
+    comment: "店舗ごとのオプションON/OFF。options_masterと組み合わせて運用。"
+    columns:
+      id:
+        type: bigint unsigned
+        nullable: false
+        extra: auto_increment
+        key: PRI
+        comment: "DB主キー"
+      shop_id:
+        type: bigint unsigned
+        nullable: false
+        key: MUL
+        comment: "店舗ID（shops.id）"
+      option_id:
+        type: int unsigned
+        nullable: false
+        key: MUL
+        comment: "オプションID（options_master.id）"
+      value:
+        type: tinyint(1)
+        nullable: false
+        default: 0
+        comment: "値: 1=ON, 0=OFF"
+      updated_at:
+        type: datetime
+        nullable: false
+        default: current_timestamp
+        on_update: current_timestamp
+        comment: "更新日時"
+    unique_keys:
+      uq_shop_option:
+        columns: [shop_id, option_id]
+
+  fee_items:
+    comment: "課金アイテムマスタ。パッケージ構成要素やアドオン課金の最小単位。"
+    columns:
+      id:
+        type: int unsigned
+        nullable: false
+        extra: auto_increment
+        key: PRI
+        comment: "DB主キー"
+      item_code:
+        type: varchar(64)
+        nullable: false
+        key: UNI
+        comment: "課金項目コード（例: hp_listing, system_mgmt, camera_safie, bgm_usen）"
+      item_name:
+        type: varchar(255)
+        nullable: false
+        comment: "課金項目名（請求書表示名のベース）"
+      default_unit_price:
+        type: int unsigned
+        nullable: true
+        comment: "標準単価（円）。店舗別に上書き可能。"
+      notes:
+        type: text
+        nullable: true
+        comment: "備考／説明"
+      updated_at:
+        type: datetime
+        nullable: false
+        default: current_timestamp
+        on_update: current_timestamp
+        comment: "更新日時"
+
+  fee_packages:
+    comment: "パッケージマスタ。無人システム管理費やU-パッケージ等の定額セット。"
+    columns:
+      id:
+        type: int unsigned
+        nullable: false
+        extra: auto_increment
+        key: PRI
+        comment: "DB主キー"
+      package_code:
+        type: varchar(64)
+        nullable: false
+        key: UNI
+        comment: "パッケージコード（例: sys_mgmt_v1, usen_pkg, full_system）"
+      package_name:
+        type: varchar(255)
+        nullable: false
+        comment: "パッケージ名（請求書表示用）"
+      monthly_price:
+        type: int unsigned
+        nullable: false
+        comment: "月額定額料金（円）"
+      notes:
+        type: text
+        nullable: true
+        comment: "備考／説明"
+      updated_at:
+        type: datetime
+        nullable: false
+        default: current_timestamp
+        on_update: current_timestamp
+        comment: "更新日時"
+
+  package_components:
+    comment: "パッケージを構成する課金アイテム（fee_items）の内訳。"
+    columns:
+      id:
+        type: int unsigned
+        nullable: false
+        extra: auto_increment
+        key: PRI
+        comment: "DB主キー"
+      package_code:
+        type: varchar(64)
+        nullable: false
+        key: MUL
+        comment: "パッケージコード（fee_packages.package_code）"
+      item_code:
+        type: varchar(64)
+        nullable: false
+        key: MUL
+        comment: "内訳アイテムコード（fee_items.item_code）"
+      qty:
+        type: int unsigned
+        nullable: true
+        comment: "数量（任意。通常1）"
+      notes:
+        type: text
+        nullable: true
+        comment: "備考"
+    unique_keys:
+      uq_package_item:
+        columns: [package_code, item_code]
+
+  shop_fee_package_assignments:
+    comment: "店舗ごとのパッケージ割当。無人システム管理費などの定額1行を表現。"
+    columns:
+      id:
+        type: bigint unsigned
+        nullable: false
+        extra: auto_increment
+        key: PRI
+        comment: "DB主キー"
+      shop_id:
+        type: bigint unsigned
+        nullable: false
+        key: MUL
+        comment: "店舗ID（shops.id）"
+      package_code:
+        type: varchar(64)
+        nullable: false
+        key: MUL
+        comment: "パッケージコード（fee_packages.package_code）"
+      monthly_price_override:
+        type: int unsigned
+        nullable: true
+        comment: "店舗別上書き単価（円）。NULLの場合はfee_packages.monthly_priceを使用。"
+      visible_on_invoice:
+        type: tinyint(1)
+        nullable: false
+        default: 1
+        comment: "請求書に1行として表示するか: 1=表示, 0=非表示"
+      start_date:
+        type: date
+        nullable: false
+        comment: "適用開始日"
+      end_date:
+        type: date
+        nullable: true
+        comment: "終了日（NULL=継続中）"
+      notes:
+        type: text
+        nullable: true
+        comment: "備考"
+      created_at:
+        type: datetime
+        nullable: false
+        default: current_timestamp
+        comment: "登録日時"
+      updated_at:
+        type: datetime
+        nullable: false
+        default: current_timestamp
+        on_update: current_timestamp
+        comment: "更新日時"
+
+  shop_fee_addons:
+    comment: "店舗別アドオン課金。HP掲載料や電話代行費など個別行で請求する項目。"
+    columns:
+      id:
+        type: bigint unsigned
+        nullable: false
+        extra: auto_increment
+        key: PRI
+        comment: "DB主キー"
+      shop_id:
+        type: bigint unsigned
+        nullable: false
+        key: MUL
+        comment: "店舗ID（shops.id）"
+      item_code:
+        type: varchar(64)
+        nullable: false
+        key: MUL
+        comment: "課金項目コード（fee_items.item_code）"
+      unit_price:
+        type: int unsigned
+        nullable: false
+        comment: "単価（円）"
+      qty:
+        type: int unsigned
+        nullable: false
+        default: 1
+        comment: "数量"
+      billing_cycle:
+        type: varchar(16)
+        nullable: false
+        default: "monthly"
+        comment: "請求周期: monthly=毎月, one_time=単発"
+      visible_on_invoice:
+        type: tinyint(1)
+        nullable: false
+        default: 1
+        comment: "請求書に個別行として表示するか: 1=表示, 0=非表示"
+      start_date:
+        type: date
+        nullable: false
+        comment: "適用開始日"
+      end_date:
+        type: date
+        nullable: true
+        comment: "終了日（NULL=継続中）"
+      notes:
+        type: text
+        nullable: true
+        comment: "備考"
+      created_at:
+        type: datetime
+        nullable: false
+        default: current_timestamp
+        comment: "登録日時"
+      updated_at:
+        type: datetime
+        nullable: false
+        default: current_timestamp
+        on_update: current_timestamp
+        comment: "更新日時"
+
+  shop_royalty_history:
+    comment: "ロイヤリティ設定の履歴。期間限定減額や特例を期間で管理する。"
+    columns:
+      id:
+        type: bigint unsigned
+        nullable: false
+        extra: auto_increment
+        key: PRI
+        comment: "DB主キー"
+      shop_id:
+        type: bigint unsigned
+        nullable: false
+        key: MUL
+        comment: "店舗ID（shops.id）"
+      start_date:
+        type: date
+        nullable: false
+        comment: "適用開始日"
+      end_date:
+        type: date
+        nullable: true
+        comment: "適用終了日（NULL=継続中）"
+      royalty_type:
+        type: varchar(16)
+        nullable: false
+        default: "flat"
+        comment: "方式: flat=定額, percent=売上％, mixed=定額+％"
+      royalty_flat:
+        type: int unsigned
+        nullable: true
+        comment: "定額額（円）。royalty_type=flat/mixedで使用。"
+      royalty_percent:
+        type: decimal(5,2)
+        nullable: true
+        comment: "率（％）。royalty_type=percent/mixedで使用。"
+      notes:
+        type: text
+        nullable: true
+        comment: "備考（交渉内容や特約メモ）"
+      created_at:
+        type: datetime
+        nullable: false
+        default: current_timestamp
+        comment: "登録日時"
+      updated_at:
+        type: datetime
+        nullable: false
+        default: current_timestamp
+        on_update: current_timestamp
+        comment: "更新日時"
+
+  supply_items:
+    comment: "備品マスタ。発注・請求に利用する。"
+    columns:
+      id:
+        type: int unsigned
+        nullable: false
+        extra: auto_increment
+        key: PRI
+        comment: "DB主キー"
+      name:
+        type: varchar(255)
+        nullable: false
+        comment: "備品名"
+      unit_price:
+        type: int unsigned
+        nullable: false
+        comment: "販売単価（円）"
+      cost_price:
+        type: int unsigned
+        nullable: true
+        comment: "仕入原価（円）"
+      stock_unit:
+        type: varchar(32)
+        nullable: true
+        comment: "単位（箱, 本, 枚 等）"
+      category:
+        type: varchar(64)
+        nullable: true
+        comment: "カテゴリ（消耗品, 備品 等）"
+      notes:
+        type: text
+        nullable: true
+        comment: "備考"
+      updated_at:
+        type: datetime
+        nullable: false
+        default: current_timestamp
+        on_update: current_timestamp
+        comment: "更新日時"
+
+  shop_supplies:
+    comment: "店舗ごとの備品発注履歴。ステータスで進捗を管理し請求に連動させる。"
+    columns:
+      id:
+        type: bigint unsigned
+        nullable: false
+        extra: auto_increment
+        key: PRI
+        comment: "DB主キー"
+      shop_id:
+        type: bigint unsigned
+        nullable: false
+        key: MUL
+        comment: "店舗ID（shops.id）"
+      supply_id:
+        type: int unsigned
+        nullable: false
+        key: MUL
+        comment: "備品ID（supply_items.id）"
+      quantity:
+        type: int unsigned
+        nullable: false
+        comment: "数量"
+      unit_price:
+        type: int unsigned
+        nullable: false
+        comment: "単価（円）"
+      total_price:
+        type: int unsigned
+        nullable: false
+        comment: "合計金額（円）"
+      status:
+        type: varchar(16)
+        nullable: false
+        default: "requested"
+        comment: "状態: requested/approved/shipped/completed/canceled"
+      requested_at:
+        type: datetime
+        nullable: true
+        comment: "発注日時"
+      approved_at:
+        type: datetime
+        nullable: true
+        comment: "本部承認日時"
+      shipped_at:
+        type: datetime
+        nullable: true
+        comment: "出荷日時"
+      completed_at:
+        type: datetime
+        nullable: true
+        comment: "受領（完了）日時"
+      notes:
+        type: text
+        nullable: true
+        comment: "備考"
+      created_at:
+        type: datetime
+        nullable: false
+        default: current_timestamp
+        comment: "登録日時"
+      updated_at:
+        type: datetime
+        nullable: false
+        default: current_timestamp
+        on_update: current_timestamp
+        comment: "更新日時"
+
+  shop_links:
+    comment: "店舗ごとの外部リンク集。Googleマップ, SNS, LP, アンケートなど。"
+    columns:
+      id:
+        type: bigint unsigned
+        nullable: false
+        extra: auto_increment
+        key: PRI
+        comment: "DB主キー"
+      shop_id:
+        type: bigint unsigned
+        nullable: false
+        key: MUL
+        comment: "店舗ID（shops.id）"
+      link_type:
+        type: varchar(32)
+        nullable: false
+        comment: "種別: google_map/google_review/instagram/lp/survey/ticket/product/blog/official_site/line_add/other 等"
+      link_url:
+        type: varchar(1024)
+        nullable: false
+        comment: "URL本体"
+      notes:
+        type: text
+        nullable: true
+        comment: "備考（用途メモなど）"
+      updated_at:
+        type: datetime
+        nullable: false
+        default: current_timestamp
+        on_update: current_timestamp
+        comment: "更新日時"
+
+  shop_internal_info:
+    comment: "店舗内部情報（本部専用）。鍵・セコム・施工業者・緊急連絡先など。"
+    columns:
+      id:
+        type: bigint unsigned
+        nullable: false
+        extra: auto_increment
+        key: PRI
+        comment: "DB主キー"
+      shop_id:
+        type: bigint unsigned
+        nullable: false
+        key: MUL
+        comment: "店舗ID（shops.id）"
+      info_type:
+        type: varchar(32)
+        nullable: false
+        comment: "種別: key/secom/vendor/emergency_contact/contract_info/notice/other 等"
+      value:
+        type: text
+        nullable: false
+        comment: "情報内容（自由記述）"
+      updated_at:
+        type: datetime
+        nullable: false
+        default: current_timestamp
+        on_update: current_timestamp
+        comment: "更新日時"
+
+  sales_records:
+    comment: "STORES予約から取り込んだ売上データの統合テーブル。月謝・都度カード・現地決済を1フォーマットに統一。"
+    columns:
+      id:
+        type: bigint unsigned
+        nullable: false
+        extra: auto_increment
+        key: PRI
+        comment: "DB主キー"
+      merchant_public_id:
+        type: varchar(64)
+        nullable: false
+        key: MUL
+        comment: "STORES予約のmerchant_public_id（shops.merchant_public_idと一致）"
+      shop_id:
+        type: bigint unsigned
+        nullable: false
+        key: MUL
+        comment: "店舗ID（shops.id）。merchant_public_idから解決。"
+      source_type:
+        type: varchar(32)
+        nullable: false
+        comment: "データ種別: monthly_ticket（回数券・月謝）/ spot_card（都度カード）/ spot_local（現地決済）"
+      transaction_type:
+        type: varchar(64)
+        nullable: true
+        comment: "取引種別（STORES側の列値。売上/返金など）"
+      transaction_datetime:
+        type: datetime
+        nullable: false
+        comment: "取引日時（カード売上の取引日時、現地決済は予約日時等）"
+      amount:
+        type: int unsigned
+        nullable: false
+        comment: "販売金額（税込想定）"
+      fee:
+        type: int unsigned
+        nullable: true
+        comment: "手数料（カード決済等）。現地決済はNULLまたは0。"
+      revenue:
+        type: int unsigned
+        nullable: false
+        comment: "売上（手取り）。カードはamount-fee、現地決済はamountと同値。"
+      product_name:
+        type: varchar(255)
+        nullable: false
+        comment: "商品名／メニュー名（商品名/タイトル/メニュー列から統合）"
+      customer_name:
+        type: varchar(255)
+        nullable: true
+        comment: "顧客氏名"
+      customer_email:
+        type: varchar(255)
+        nullable: true
+        comment: "顧客メールアドレス"
+      customer_phone:
+        type: varchar(32)
+        nullable: true
+        comment: "顧客電話番号"
+      is_trial:
+        type: tinyint(1)
+        nullable: false
+        default: 0
+        comment: "お試し体験フラグ: 1=商品名/メニューに「お試し体験」を含む, 0=それ以外"
+      payment_method:
+        type: varchar(32)
+        nullable: true
+        comment: "支払方法: card/local など（現地決済CSVの支払方法列を含む）"
+      status:
+        type: varchar(32)
+        nullable: true
+        comment: "ステータス。現地決済の場合は「確定」など。確定行のみ取り込む想定。"
+      created_at:
+        type: datetime
+        nullable: false
+        default: current_timestamp
+        comment: "CSV取込日時"
+      updated_at:
+        type: datetime
+        nullable: false
+        default: current_timestamp
+        on_update: current_timestamp
+        comment: "更新日時"
