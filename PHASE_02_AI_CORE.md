@@ -1,377 +1,538 @@
-# PHASE_02_AI_CORE.md  
-**加盟店サポート自動化プロジェクト v1.4**  
-**フェーズ2：AIコア（AI_CORE）仕様設計書 — Final Draft**
+# AI_CORE - 仕様設計書 (PHASE_02_AI_CORE.md Draft)
+
+## 1. 目的・範囲
+
+### 1.1 目的
+
+本フェーズ（Phase 2：AI_CORE）は、以下 4 チャネルのすべてから共通で呼び出される
+
+「AIコア（意図分類＋回答生成＋フォールバック＋ログ）」の仕様を定義する。
+
+- エンドユーザー：`help.`（Web）／`line.`（LINE）
+- 加盟店：`shop.`（オーナーポータル）
+- 本部：`ai.`（本部管理画面）
+
+AI_CORE の主な役割：
+
+- ユーザー発話を受け取り、
+    - インテント（意図）の分類
+    - FAQ／シナリオ／テンプレ回答の選択・生成
+    - フォールバック（テンプレ／有人／チケット化）の判断
+    を行い、応答文＋メタ情報を返す。
+- Phase1 で定義した SYS_CORE（`SysConfig` / `SysLogger` / `SysEscalation` / `tickets` 等）と連携し、
+AI 応答ログとチューニング用メタ情報を一貫して記録・活用できる状態を作る。
+
+### 1.2 範囲
+
+本フェーズで扱うもの：
+
+- AI_CORE の I/O 契約（AI_CORE_REQUEST / AI_CORE_RESPONSE）
+- AI_CORE 内部の処理フロー（インテント分類〜フォールバック判断）
+- AI 会話ログのデータ構造（`ai_sessions` / `ai_turns`）と `tickets` との紐づけ
+- LLM 呼び出しの基本方針（SYS_CORE 経由、モデル指定、閾値の考え方）
+
+本フェーズで扱わない（別フェーズで定義する）もの：
+
+- 各チャネルの UI／文言（画面ラフ・ボタン配置など）
+- STORES予約／RemoteLOCK との具体的な API I/O（Phase3：API_COMM）
+- FAQ／シナリオ／テンプレ本文そのものの管理画面仕様
+- 「セルフ解決しました」など、ユーザーからの明示フィードバック UI 詳細（チュートリアル層フェーズ）
 
 ---
 
-# 1. 目的・範囲
+## 2. 前フェーズからの継承ポイント
 
-本仕様は、help./line./shop./ai. を含む全チャネルに共通する  
-**AIコア（AI_CORE）＝単一の頭脳** の設計仕様を定義する。
+### 2.1 システム構成（Phase0 / spec_v1.4_base）
 
-対象範囲：
+- サブドメイン構成
+    - エンドユーザー：`help.self-datsumou.net` / `line.self-datsumou.net`
+    - 加盟店：`shop.self-datsumou.net`
+    - 本部：`ai.self-datsumou.net`
+- 共通ライブラリ構造
+    - `shared/` 配下に共通機能を集約する方針
+    - AI_CORE は `shared/ai_core.php`（仮称）として実装される前提
 
-- 顧客・加盟店・本部の全問い合わせを共通AIコアで処理  
-- 意図分類（カテゴリ分岐）  
-- サブカテゴリ推定  
-- ナレッジ検索  
-- 回答生成（OpenAI）  
-- STORES予約API参照  
-- エスカレーション制御  
-- ログ・分析指標
+### 2.2 DB コア（PHASE_00_DB_CORE / db_fields.yaml）
 
-対象外：
+- 主な既存テーブル（抜粋）
+    - `owners`：オーナー情報
+    - `shops`：店舗マスタ
+    - `shop_secrets`：店舗別シークレット（APIキー等）
+    - `options_master`：全体設定マスタ
+    - `shop_options`：店舗別設定（`options_master` の上書き）
+- AI_CORE は、これらのテーブルを参照しつつ、
+AI会話ログ用に新規テーブル（`ai_sessions` / `ai_turns`）を追加する。
 
-- UI設計（HELP_UI / LINE_UI / SHOP_UI / AI_UI）  
-- RemoteLOCK連携（PHASE01にて今回非対応と決定）  
-- STORES予約の自動ポーリング（次フェーズ）
+### 2.3 SYS_CORE 連携（PHASE_01_SYS_CORE）
 
----
+- SYS_CORE の責務（要点）
+    - `SysConfig`：`options_master` / `shop_options` / `.env` から有効な設定値を解決
+    - `SysLogger`：`api_call_logs` / `sys_events` / `tickets` など共通ログの窓口
+    - `SysEscalation`：ChatWork／メール／SMS／チケット化など有人対応窓口
+    - HTTPクライアント：OpenAI／STORES／RemoteLOCK 等の外部API呼び出し共通レイヤー
+- AI_CORE からの呼び出し方針
+    - LLM 呼び出しは必ず SYS_CORE の HTTP クライアント経由とし、
+    AI_CORE は API キーやベースURLを直接扱わない。
 
-# 2. 前フェーズからの継承ポイント（PHASE_01_SYS_CORE）
+### 2.4 トーン／スタイル方針（共通ルール）
 
-- **チャネル統合設計**：help./line./shop./ai. → すべて同じ AIコアを呼び出す  
-- **共通APIレイヤー**：AIコアから外部APIを直接叩かず、SYS_COREのAPIレイヤー経由  
-- **通知はキュー方式**：Mail / Chatwork / SMS はすべて非同期処理  
-- **設定値は原則パラメータ管理**  
-  ※あなたの決裁で「危険カテゴリの自動回答禁止」等は AIコア固定ルール化  
-- **すべての問い合わせは tickets / ticket_messages に集約**
+- エンドユーザー向け（help./LINE）
+    - 「人間が丁寧に説明している」トーン
+    - 顔文字や柔らかめの表現を適度に使用し、機械感を減らす
+- 加盟店向け（shop.）
+    - ぶっきらぼう NG
+    - 疑問や不安に寄り添うトーン
+- 本部向け（ai.）
+    - 事務的だが冷たすぎない、簡潔で誤解のない説明
 
----
-
-# 3. 新規決定事項（あなたの決裁反映）
-
----
-
-## 3-1. Super Category（最上位カテゴリ・固定）
-
-AIコアは最初に「誰向けの質問か」を判別し、ロール別の応答方針を適用する。
-
-```
-super_category:
-  - customer（顧客）
-  - owner（加盟店）
-  - hq（本部）
-```
-
-※ **AI任せにせず、チャネル側で必ず指定すること。**
+AI_CORE のプロンプト／テンプレは、このトーン方針を前提とする。
 
 ---
 
-## 3-2. Parent Category（大分類・AIコア固定）
+## 3. 新規決定事項
 
-AIの初動判断・自動回答可否・エスカレーション判断に使う“固定棚”。
+### 3.1 決定事項
 
-| parent_category | 説明 | 自動回答 |
-|----------------|------|-----------|
-| faq_basic | 基本FAQ・利用方法 | ◎可能 |
-| reservation_related | 予約・キャンセル | ◎可能（STORES参照） |
-| operation_store | 店舗運営・売上相談 | ◎可能 |
-| trouble_technical | 技術トラブル | △状況次第 |
-| trouble_customer | 顧客トラブル | ×禁止 |
-| contract_fc | 契約・解約・ロイヤリティ | ×禁止 |
-| others | 判定不能 | ×確認必須 |
+1. 頭脳は 1 つ・チャネル差はパラメータで吸収
+    - help. / line. / shop. / ai. は、すべて共通の AI_CORE を利用する。
+    - チャネル差（顧客／加盟店／本部）は、プロンプト・温度・履歴長さなどのパラメータで吸収する。
+2. LLM 呼び出しは SYS_CORE 経由
+    - AI_CORE は LLM を直接叩かず、SYS_CORE 提供の HTTP クライアントを通じて実行する。
+    - モデル名やベースURL、APIキーは `.env` / `shop_secrets` / `options_master` から `SysConfig` が解決。
+3. STORES／RemoteLOCK との役割分担
+    - AI_CORE：
+        - インテント分類
+        - 「これは予約変更フロー」「これは解錠番号フロー」などのルーティング判断
+    - API_COMM：
+        - 実際の STORES／RemoteLOCK API 呼び出し
+        - 取得データを元にした最終値（予約情報・解錠番号など）の決定
+4. モデル指定はすべてパラメータ管理
+    - コードにモデル名を固定せず、
+        - `ai_core.default_model`
+        - `ai_core.model_per_channel.help`
+        - `ai_core.model_per_channel.shop` など
+        を `options_master` / `shop_options` 経由で指定可能にする。
+5. チャネル別“性格”設定
+    - 温度・max_tokens・履歴ターン数などは`ai_core.temperature.*` / `ai_core.max_tokens.*` / `ai_core.max_history_turns.*` といったキーで管理。
+    - 初期値は「安全寄り」（暴れすぎない／過激な生成を避ける）で設定する。
+6. インテント信頼度とフォールバック方針
+    - 加盟店→本部エスカレーション
+        - 「なるべくAIで踏ん張る」「かなり慎重にエスカレーション」
+        - よほど信頼度が低い／危険（クレーム・法的リスク等）でない限り即チケット化しない。
+    - 顧客→加盟店エスカレーション
+        - 「なるべくAIで踏ん張る」前提。
+        - 予約や解錠番号など、AIだけで完結しづらいものだけをエスカレーション候補とする。
+    - リリース初期も、「ある程度 AI に任せる」方向でスタートし、ログを見ながら閾値をチューニングする。
+7. ログ構造：`ai_sessions` / `ai_turns` の二層構造を採用
+    - `ai_sessions`：会話単位のメタ情報（チャネル／店舗／解決状況など）
+    - `ai_turns`：個々の発話単位（ユーザー発話／AI応答／インテント／トークン数など）
+8. `tickets` への `ai_session_id` 追加
+    - `tickets` テーブルに `ai_session_id` カラムを追加し、
+    「このチケットはどのAI会話から生まれたか」を辿れるようにする。
+9. セッション切断の共通ルール
+    - 「最終アクティビティから 15 分以上経過したら、新規セッションとして扱う」
+    - このルールは全チャネル共通とする（Phase2 時点）。
+10. 生テキストログと PII の扱い
+    - 個人情報が含まれていないと意味をなさないログは「短期間のみフルテキスト保持」。
+    - マスク後も意味があるログは、マスク済みで長期間保持。
+    - 個人情報特定につながる情報（電話番号・メール・予約番号 等）は、一定期間後にマスキングする。
+    - ログ量がシステムに負荷をかけない範囲に収まるよう、保持期間・マスキングで調整する。
+11. 加盟店からのログ閲覧粒度
+    - 自動応答も含め、店舗ごとの会話履歴は `shop.` から閲覧可能とする（PIIマスク適用前提）。
+12. KPI としてのセルフ解決率
+    - `ai_sessions` に「セルフ解決フラグ」を持ち、
+    セルフ解決率を KPI として本部内部で追う。
+    - 加盟店には「セルフ解決率を数値として見せる」ことは想定せず、
+    本部のプロジェクト評価・改善指標として利用する。
 
----
+### 3.2 未決事項（Phase2 内での検討対象）
 
-## 3-3. Detail Category（サブカテゴリ・柔軟追加可）
+- インテントマスタの具体的な保存方式
+    - 専用テーブル（例：`ai_intents_master`）を設計するか、`options_master` の一カテゴリとして扱うか。
+- FAQ／シナリオデータのテーブル構成
+    - AI_CORE フェーズで最低限の構造まで定義するか、
+    チュートリアル層フェーズで集中的に扱うか。
+- 閾値・保持期間の具体値
+    - 各種信頼度閾値（high/low）
+    - フルテキスト保持日数／マスキングまでの猶予期間
 
-- サブカテゴリは **本部管理UIで追加・修正可能**  
-- AIは「サブカテゴリ候補」を提案  
-- 最終確定は人間が行う
-
-例：
-- `reservation_related/no_show`  
-- `operation_store/marketing_consulting`  
-- `trouble_customer/payment_issue`
-
----
-
-## 3-4. 自動回答の可否ルール（AIコア固定ロジック）
-
-### ◎ 自動回答「可能」
-- FAQに答えがあるもの  
-- テンプレートに該当  
-- マニュアル参照で完結  
-- 過去ログからパターン化済み  
-
-### ✕ 自動回答「禁止」
-- クレーム  
-- 危険行為  
-- 破損・損害  
-- 未払い  
-- 法律・炎上リスク  
-- 契約・解約・違約金  
-- AIの自信度が極端に低い  
-- 親カテゴリが `trouble_customer` / `contract_fc`
-
-※ 本部管理UIから変更不可（固定ルールとして実装）
-
----
-
-## 3-5. チャネル別の応答方針（あなたの戦略を反映）
-
-### help. / line.（顧客向け）
-- 原則100％ AI自動回答  
-- STORES予約IDがあれば必ず該当店舗を特定  
-- 店舗固有判断が必要 → 自動で店舗チケット化  
-- 非会員の重いクレーム → 本部へエスカレーション  
-- 攻撃的文言 → Chatworkへアラート
-
-### shop.（加盟店 → 本部）
-- マニュアル内で完結するものはAI 100％回答  
-- 緊急案件のみ本部へ  
-- マーケ相談 → 予約誘導
-
-### ai.（本部内部）
-- 内部向けのレビュー・チューニング用
-
----
-
-## 3-6. STORES予約API連携（今回のフェーズで確定）
-
-### 今回実施する内容（参照のみ）
-- 予約ID・会員判定  
-- キャンセル可否（1時間ルール）  
-- 予約ステータス  
-- 店舗ID判定
-
-### AIの自動案内
-- キャンセル可能 → 会員自身で操作案内  
-- キャンセル不可 → 店舗へ手動キャンセル指示（チケット化）  
-- 予約整合性エラー → 店舗アラート
-
-### 次フェーズ以降（今回非対象）
-- STORES自動ポーリング機能  
-- RemoteLOCK連携  
-- 予約補正ロジック
+これらは、数値やテーブル構造の具体案を出した上で、このフェーズ内で確定させる。
 
 ---
 
-## 3-7. LLMパラメータ（本部管理UIで可変）
+## 4. データ構造 / I/O 定義
 
-- temperature  
-- max_tokens  
-- 丁寧さ  
-- 絵文字使用頻度  
-- 禁止ワード  
-- 文体（formal / friendly）
+### 4.1 AI_CORE_REQUEST（入力）
 
-※ 店舗オーナーは編集不可（あなたの決裁）
-
----
-
-## 3-8. AI固定応答方針（Bot感NG・あなたの追加要望）
-
-AIコアは **常に人間味を最優先し、ボット感を厳禁とする**（ハードルール）。
-
-### （1）ボット感の禁止項目
-- 無機質・事務的・冷たい文章  
-- 「私はAIです」などの自己開示  
-- テンプレ棒読み調  
-- 文語体連投  
-- 命令文の羅列
-
-### （2）ロール別トーン（super_category別）
-
-#### 顧客向け（customer）
-- 柔らかく丁寧  
-- 若干の口語表現  
-- 安心感を与える  
-- 適度に顔文字・絵文字🙂  
-- 例）  
-  「大丈夫ですよ！こちらで確認してみますね✨」
-
-#### 加盟店向け（owner）
-- 上から目線禁止  
-- マニュアル文体禁止  
-- 親身・寄り添いトーン  
-- 例）  
-  「いつも運営ありがとうございます。状況を整理すると…」
-
-#### 本部向け（hq）
-- 端的で論理的だが無機質禁止  
-- 内部メモに向いた文章
-
-### （3）チューニング可否
-- **可**：tone, temperature, 丁寧さ, 絵文字頻度, 禁止ワード  
-- **不可**：ボット感NG・人間味最優先・ロール別方針
-
----
-
-# 4. データ構造 / I/O形式
-
----
-
-## 4-1. AI_CORE_REQUEST（JSON）
-
-```jsonc
+```json
 {
-  "channel": "help | line | shop | ai",
-  "user_role": "customer | owner | hq",
-  "tenant_id": "STORE_XXXX",
-  "ticket_id": "TCK_YYYY",
-  "message_id": "MSG_ZZZZ",
-  "message_text": "問い合わせ本文",
+  "request_id": "uuid-string",              // ログ相関用の一意ID（未指定時はSYS_CORE側で採番）
+  "channel": "help | line | shop | ai",    // 呼び出し元チャネル
+  "actor_type": "customer | merchant | hq",// ユーザー種別
+  "tenant_code": "hygi",                   // 将来のマルチテナント拡張用（v1.4では固定想定）
+  "shop_id": 123,                          // 対象店舗ID（不明な場合はnull）
+  "owner_id": 456,                         // 加盟店オーナーID（加盟店チャット時）
+  "end_user_id": "string-or-null",         // 会員ID／LINE IDなど（匿名の場合はnull）
   "locale": "ja-JP",
-  "meta": {
-    "user_id": "USER_XXX",
-    "store_plan": "standard | premium",
-    "previous_intent": "reservation_related/no_show",
-    "is_new_ticket": true,
-    "channel_specific": {
-      "line_user_id": "LINE_123",
-      "email": "foo@example.com"
+  "timezone": "Asia/Tokyo",
+
+  "user_message": "string",                // 最新のユーザー発話
+  "conversation_history": [
+    {
+      "role": "user | assistant | system",
+      "content": "string",
+      "timestamp": "2025-11-17T01:23:45+09:00"
     }
+  ],
+
+  "context": {
+    "shop_basic": {
+      "name": "セルフ脱毛サロン ハイジ名古屋〇〇店",
+      "region_name": "名古屋",
+      "shop_status": "open"
+    },
+    "user_profile": {
+      "is_member": true,
+      "gender": "male | female | unknown | null",
+      "age_range": "20s | 30s | ... | null"
+    },
+    "session": {
+      "ai_session_id": 9999,               // 既存セッションID。新規の場合はnull
+      "channel_session_key": "LINEのuserIdなど"
+    },
+    "runtime_flags": {
+      "debug_mode": false,
+      "force_intent": null                 // デバッグ用のインテント固定（通常運用ではnull）
+    }
+  },
+
+  "options": {
+    "max_tokens": 800,                     // LLM呼び出しに渡すmax_tokens（未指定時はSysConfigの値）
+    "temperature": 0.3,
+    "top_p": 0.9
   }
 }
+
 ```
 
----
+### 4.2 AI_CORE_RESPONSE（出力）
 
-## 4-2. AI_CORE_RESPONSE（JSON）
-
-```jsonc
+```json
 {
-  "status": "ok | escalated | error",
-  "ticket_id": "TCK_YYYY",
-  "message_id": "MSG_RESP",
-  "reply_text": "AIが生成した本文",
-  "reply_type": "auto | draft | human_only",
-  "super_category": "customer | owner | hq",
+  "request_id": "uuid-string",        // 入力と同じID
+  "ai_session_id": 9999,              // AIセッションID（新規セッションの場合はここで採番結果を返す）
+
+  "reply_text": "string",             // ユーザーに返却するメイン応答文
+  "reply_text_alt": [                 // （任意）代替案／分割用テキスト
+    "string"
+  ],
+
   "intent": {
-    "parent": "reservation_related",
-    "detail": "reservation_related/no_show",
-    "confidence": 0.83
+    "key": "faq.booking.change",      // インテントキー（マスタ参照）
+    "label": "予約変更・キャンセル",
+    "confidence": 0.87                // 0〜1 のスコア
   },
+
+  "classification": {
+    "category": "booking",           // 大分類
+    "subcategory": "change",         // 小分類
+    "urgency": "normal | high | low" // 緊急度（クレーム／鍵トラブル等）
+  },
+
+  "answer": {
+    "type": "faq | scenario | template | generated | handoff",
+    "source_id": 1234,               // FAQやシナリオID（無い場合はnull）
+    "reason": "high_confidence_faq"  // 採用理由（ログ／デバッグ用）
+  },
+
   "escalation": {
-    "required": true,
-    "level": "normal | high",
-    "target": "owner | hq",
-    "note": "人間向け補足"
+    "action": "none | create_ticket | transfer_to_human",
+    "reason": "low_confidence | policy_block | user_request | system_error",
+    "ticket_draft": {
+      "title": "[名古屋〇〇店] 予約変更の問い合わせ",
+      "body_preview": "ユーザー: ...\nAI案内: ...",
+      "priority": "low | normal | high",
+      "tags": ["ai-escalation", "booking"]
+    }
   },
-  "logs": {
-    "log_id": "LOG_XXXX",
-    "used_kb": ["KB_001", "KB_002"],
-    "self_resolved": true,
-    "resolution_path": "auto"
+
+  "logging": {
+    "log_level": "info | warn | error",
+    "should_log_prompt": true,
+    "should_log_answer": true
+  },
+
+  "meta": {
+    "model_name": "resolved-by-SysConfig", // 使用モデル名
+    "prompt_tokens": 123,
+    "completion_tokens": 456,
+    "total_tokens": 579,
+    "latency_ms": 842
   }
 }
+
 ```
 
+### 4.3 ログ用データモデル（DDL案）
+
+### 4.3.1 `ai_sessions`（会話単位）
+
+```sql
+CREATE TABLE ai_sessions (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT 'AIセッションID',
+  channel ENUM('help','line','shop','ai') NOT NULL COMMENT 'チャネル種別',
+  actor_type ENUM('customer','merchant','hq') NOT NULL COMMENT 'ユーザー種別',
+  tenant_code VARCHAR(32) NOT NULL DEFAULT 'hygi' COMMENT 'テナントコード（将来拡張用）',
+  shop_id BIGINT NULL COMMENT '対象店舗ID（不明時NULL）',
+  owner_id BIGINT NULL COMMENT '加盟店オーナーID',
+  end_user_id VARCHAR(191) NULL COMMENT 'エンドユーザーID（会員ID／LINE ID等）',
+  channel_session_key VARCHAR(191) NULL COMMENT 'チャネル固有セッションキー（LINE userId等）',
+
+  started_at DATETIME NOT NULL COMMENT 'セッション開始日時',
+  last_activity_at DATETIME NOT NULL COMMENT '最終アクティビティ日時',
+  status ENUM('active','closed') NOT NULL DEFAULT 'active' COMMENT 'セッション状態',
+
+  resolved_status ENUM('unknown','resolved_by_ai','resolved_by_human','abandoned')
+    NOT NULL DEFAULT 'unknown' COMMENT '解決ステータス',
+  is_self_solved TINYINT(1) NOT NULL DEFAULT 0 COMMENT 'セルフ解決できたか',
+
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NOT NULL,
+  PRIMARY KEY (id),
+  KEY idx_ai_sessions_channel (channel),
+  KEY idx_ai_sessions_shop (shop_id),
+  KEY idx_ai_sessions_owner (owner_id),
+  KEY idx_ai_sessions_end_user (end_user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='AI会話セッション';
+
+```
+
+### 4.3.2 `ai_turns`（発話単位）
+
+```sql
+CREATE TABLE ai_turns (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT 'AIターンID',
+  ai_session_id BIGINT UNSIGNED NOT NULL COMMENT '紐づくAIセッションID',
+
+  direction ENUM('user','assistant','system') NOT NULL COMMENT '発話方向',
+  role_label VARCHAR(64) NOT NULL COMMENT '役割ラベル（user/customer/merchant/hq等）',
+
+  user_message TEXT NULL COMMENT 'ユーザー発話（direction=user時）',
+  reply_text TEXT NULL COMMENT 'AI応答（direction=assistant時）',
+
+  intent_key VARCHAR(191) NULL COMMENT 'インテントキー',
+  intent_label VARCHAR(191) NULL COMMENT 'インテント表示名',
+  intent_confidence DECIMAL(4,3) NULL COMMENT 'インテント信頼度（0.000-1.000）',
+
+  answer_type ENUM('faq','scenario','template','generated','handoff') NULL COMMENT '回答種別',
+  answer_source_id BIGINT NULL COMMENT '回答ソースID（FAQ/シナリオ等）',
+
+  escalation_action ENUM('none','create_ticket','transfer_to_human') NULL COMMENT 'エスカレーションアクション',
+  escalation_reason VARCHAR(191) NULL COMMENT 'エスカレーション理由',
+
+  model_name VARCHAR(191) NULL COMMENT '使用モデル名',
+  prompt_tokens INT NULL,
+  completion_tokens INT NULL,
+  total_tokens INT NULL,
+  latency_ms INT NULL COMMENT 'AI応答までのレイテンシ(ms)',
+
+  error_code VARCHAR(64) NULL COMMENT 'エラー時コード',
+
+  created_at DATETIME NOT NULL,
+  PRIMARY KEY (id),
+  KEY idx_ai_turns_session (ai_session_id),
+  KEY idx_ai_turns_intent (intent_key),
+  KEY idx_ai_turns_answer (answer_type)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='AIターンログ';
+
+```
+
+### 4.3.3 `tickets` テーブル変更案
+
+```sql
+ALTER TABLE tickets
+  ADD ai_session_id BIGINT UNSIGNED NULL COMMENT '起点となったAIセッションID（任意）',
+  ADD KEY idx_tickets_ai_session (ai_session_id);
+
+```
+
+### 4.4 🔧 パラメータ候補（AI_CORE）
+
+※ 実体は `options_master` / `shop_options` / `sys_params` 等で管理する前提。
+
+- モデル関連
+    - `ai_core.default_model`
+    - `ai_core.model_per_channel.help`
+    - `ai_core.model_per_channel.line`
+    - `ai_core.model_per_channel.shop`
+    - `ai_core.model_per_channel.ai`
+- 生成関連
+    - `ai_core.temperature.default`
+    - `ai_core.temperature.help.customer`
+    - `ai_core.temperature.shop.merchant`
+    - `ai_core.max_tokens.reply`
+    - `ai_core.max_history_turns`
+- フォールバック閾値
+    - `ai_core.intent_confidence_threshold.high`
+    - `ai_core.intent_confidence_threshold.low`
+    - `ai_core.ticket_auto_escalation_threshold`
+- ログ／保持期間
+    - `ai_core.turn_log_retention_days_full`（フルテキスト保持日数）
+    - `ai_core.turn_log_retention_days_masked`（マスク済みで保持する日数）
+    - `ai_core.session_log_retention_days`（`ai_sessions` の保持日数）
+- PII マスキング
+    - `ai_core.log_pii_masking_rules`（電話／メール／予約番号などの正規表現セット）
+    - `ai_core.log_pii_mask_after_days`（マスキングを実施するまでの日数）
+- スタイル／トーン
+    - `ai_core.style.help.customer`
+    - `ai_core.style.shop.merchant`
+    - `ai_core.style.ai.hq`
+
+店舗ごとに差異があり得るもの（トーン／温度など）は `shop_options` でオーバーライド可能とする。
+
 ---
 
-## 4-3. テーブル構造（追加分含む）
+## 5. フロー / 共通処理フロー
 
-### ai_intents（固定＋拡張カテゴリ）
-| field | description |
-|-------|-------------|
-| intent_code | `reservation_related/no_show` |
-| parent_code | `reservation_related` |
-| super_category | `customer` / `owner` / `hq` |
-| is_core_parent | boolean |
-| is_custom | boolean |
-| routing_policy | `auto_ok` / `human_required` |
+### 5.1 1ターンの基本フロー
 
----
+1. **リクエスト受領**
+    - 各チャネル（help./line./shop./ai.）から AI_CORE_REQUEST を受け取る。
+    - `request_id` が無い場合は SYS_CORE 側で採番。
+2. **セッション解決**
+    - `context.session.ai_session_id` が指定されていれば、その `ai_sessions` レコードを更新（`last_activity_at` 更新）。
+    - 指定が無ければ、新規 `ai_sessions` レコードを作成し、`ai_session_id` を採番。
+3. **インテント／分類フェーズ**
+    - SYS_CORE の HTTP クライアント経由で LLM を呼び出し、
+        
+        ユーザー発話＋必要なコンテキスト（店舗／ユーザー属性など）から:
+        
+        - インテントキー
+        - カテゴリ／サブカテゴリ
+        - 緊急度
+        - 回答候補文
+        - 信頼度ヒント
+            
+            を取得する。
+            
+4. **回答タイプ決定・フォールバック判断**
+    - 信頼度、インテント種別、緊急度、設定値をもとに
+        - `answer.type`（faq/scenario/template/generated/handoff）
+        - `escalation.action`（none/create_ticket/transfer_to_human）
+            
+            を決定。
+            
+    - STORES／RemoteLOCK フローが必要な場合は、
+        
+        「どのフローに乗せるべきか」の判断のみ行い、API_COMM 側へ渡す。
+        
+5. **応答文整形**
+    - 選ばれた回答種別＋トーン設定に基づき、`reply_text` を組み立てる。
+    - 顧客／加盟店／本部で言い回しが変わる部分はプロンプトテンプレートで制御する。
+6. **ログ記録**
+    - `ai_turns` にユーザー発話／AI応答／メタ情報を1レコードとして保存。
+    - 必要に応じて `api_call_logs`／`sys_events` にも記録（SYS_CORE責務）。
+7. **レスポンス返却**
+    - AI_CORE_RESPONSE を呼び出し元へ返す。
+    - `escalation.action != 'none'` の場合、フロント or バックエンドから `SysEscalation` を呼び出し、
+        
+        `tickets` 作成や ChatWork 通知を行う。
+        
 
-### ai_profiles（本部編集可能）
-- tone  
-- temperature  
-- emoji_level  
-- max_tokens  
-- banned_phrases
+### 5.2 エスカレーションフロー概要
 
----
-
-### store_ai_profiles（店舗プロファイル）
-- 店舗固有設定  
-※ オーナーは閲覧のみ、編集不可
-
----
-
-### ai_logs（セルフ解決記録含む）
-
-| field | description |
-|-------|-------------|
-| log_id | PK |
-| ticket_id | FK |
-| user_role | customer / owner / hq |
-| parent_intent | |
-| detail_intent | |
-| confidence | |
-| reply_type | auto / draft / human_only |
-| feedback | like/dislike/修正 |
-| summary | マスク済要約 |
-| raw_text | 30日で自動削除 |
-| self_resolved | true/false |
-| resolution_path | auto / auto_with_store / auto_with_hq / draft_fixed_by_owner / draft_fixed_by_hq / unresolved |
-
----
-
-# 5. AIコア処理フロー（共通）
-
-1. チャネル層がメッセージ受信  
-2. 既存チケットへ紐付け or 新規チケット作成  
-3. `super_category (user_role)` を必ず付与  
-4. AI_CORE_REQUEST を送信  
-5. AIコア処理  
-   - 正規化  
-   - STORES予約参照  
-   - 親カテゴリ分類  
-   - サブカテゴリ候補推定  
-   - ナレッジ検索  
-   - LLM回答生成（ボット感NGルール適用）  
-   - 自信度判定  
-   - エスカレーション判定  
-6. AI_CORE_RESPONSE返却  
-7. 店舗・本部へのルーティング  
-8. self_resolved 判定 → ai_logs 保存
+- 条件（例）
+    - 信頼度が `ai_core.intent_confidence_threshold.low` 未満
+    - クレーム／返金／鍵トラブルなど、規定上人間判断が必要なカテゴリ
+    - ユーザーが明示的に「人と話したい」「電話してほしい」と要求
+- 流れ
+    1. AI_CORE が `escalation.action` と `ticket_draft` を作成
+    2. フロント or バックエンドが `SysEscalation` にチケット案を渡す
+    3. `tickets` に登録し、ChatWork／メールなどへ通知
+    4. `tickets.ai_session_id` にセッションIDを保存し、後から会話をトレースできるようにする
 
 ---
 
-# 6. 通知 / 外部連携
+## 6. 通知 / 外部連携
 
-- **Chatwork**：危険行為・破損・攻撃的文言  
-- **Mail/SMS**：緊急連絡・重要通知  
-- **STORES予約API（参照のみ）**  
-- **RemoteLOCK**：今回非対象
+### 6.1 LLM 連携
 
----
+- AI_CORE → SYS_CORE の HTTP クライアント → LLM（OpenAI など）
+- APIキー・モデル名・ベースURLなどは `SysConfig` が解決する。
 
-# 7. セキュリティ・権限
+### 6.2 STORES / RemoteLOCK 等
 
-- 個人情報は AI に直接渡さない  
-  - 名前 → “A様”  
-  - 電話番号は “電話番号あり” 程度に抽象化  
-- rawログ：30日で削除  
-- summaryログ：1〜3年保存  
-- AI設定編集権限は本部のみ  
-- 店舗オーナーは閲覧のみ
+- AI_CORE は「この問い合わせは STORES の予約確認が必要」「解錠番号案内フロー」と判断するのみ。
+- 実際の API 呼び出しは API_COMM フェーズで定義されたエンドポイントを利用。
+- AI_CORE は API_COMM から返った結果を元に「どう説明するか」「どこまで言うか」をコントロールする。
 
----
+### 6.3 エスカレーション通知
 
-# 8. 未決課題 / 引き継ぎ
-
-- STORESポーリング機能（フェーズ外）  
-- ナレッジ編集UIの細部  
-- 絵文字頻度の最適化ロジック（顧客向け）  
-- 加盟店向け“寄り添い文例ライブラリ”の整備  
-- AIチュートリアル層（Phase3）でUI/UX統合
+- `SysEscalation` を通じて、以下への通知が可能：
+    - ChatWork（店舗用／本部用ルーム）
+    - メール
+    - SMS（必要な場合）
+- AI_CORE は「チケット下書き」「優先度」「タグ」など、通知内容の雛形を提供する。
 
 ---
 
-# ✔ 決裁済み要点まとめ
+## 7. セキュリティ・権限
 
-- 最上位カテゴリ（顧客/加盟店/本部） → **導入確定**  
-- 親カテゴリ7分類 → **固定確定**  
-- サブカテゴリ → **本部UIで自由追加**  
-- 危険カテゴリの自動回答禁止 → **AIコア固定**  
-- 自動化を最大化する基本方針 → **確定**  
-- Bot感NG（人間味最優先） → **AIコア固定**  
-- self_resolved / resolution_path 追加 → **確定**  
-- rawログ30日削除 → **確定**  
-- STORES参照のみ → **確定**  
-- 店舗オーナーのAI設定編集不可 → **確定**
+### 7.1 アクセス制御
+
+- AI_CORE は `shared/ai_core.php` 等の内部ライブラリとして実装し、
+    
+    直接外部から叩けるエンドポイントは持たない。
+    
+- 認証・認可はチャネルごとのフロント／SYS_COREで完了済みとし、
+    
+    AI_CORE には「認証済みユーザー情報」が渡される前提。
+    
+
+### 7.2 個人情報（PII）取り扱い
+
+- `ai_turns.user_message`／`ai_turns.reply_text` には、
+    
+    一時的に個人情報（電話番号／メール／予約番号など）が含まれる可能性がある。
+    
+- 標準方針：
+    - フルテキスト状態は短期間のみ保持（パラメータ `ai_core.turn_log_retention_days_full`）
+    - その後、PII マスキングルール（正規表現）に従ってマスクを実施
+    - マスク済みのテキストは「一般的な問い合わせ傾向の分析」などに利用可能とする。
+- マスキング対象例：
+    - 電話番号形式の文字列
+    - メールアドレス形式
+    - 特定フォーマットの予約番号／会員番号
+
+### 7.3 権限と可視範囲
+
+- 本部（ai.）：
+    - 全店舗の `ai_sessions` / `ai_turns` を閲覧可能（内部利用）。
+- 加盟店（shop.）：
+    - 自店舗に紐づく `ai_sessions` / `ai_turns` のみ閲覧可能。
+    - マスク後の内容を前提とし、本部向け内部メモなどは非表示。
+- エンドユーザー：
+    - 過去の会話履歴をどこまで見せるかは UI/UX フェーズで別途設計。
 
 ---
+
+## 8. 未決課題 / 次フェーズへの引き継ぎ
+
+### 8.1 Phase2 内で確定が必要な未決
+
+- インテントマスタの実装方式
+    - テーブル構造（例：`ai_intents_master`）／管理画面方針。
+- FAQ／シナリオのデータ構造
+    - テーブル分割（FAQ / シナリオ / テンプレ）と I/O 契約。
+- 閾値・保持期間の具体値
+    - インテント信頼度の high/low 値
+    - フルテキスト保持日数／マスキング日数／セッション保持日数の初期値
+
+### 8.2 チュートリアル層フェーズへの引き継ぎ
+
+- `ai_sessions.is_self_solved` の更新タイミングと UI
+    - 顧客／加盟店に「解決しました／まだ解決していない」をどう聞くか。
+- セルフ解決率／エスカレーション率のダッシュボード仕様
+    - 本部画面（ai.）でどの粒度（店舗別／チャネル別／期間別）で見せるか。
+- 「店舗ごとのAIのクセ調整」（温度／トーン）の UI と運用ルール
+    - shop_options の編集画面との連携。
