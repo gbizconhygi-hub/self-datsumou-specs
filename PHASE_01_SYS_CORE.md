@@ -1,4 +1,4 @@
-# PHASE_01_SYS_CORE — SYS_CORE 仕様書（v1.0 Final）
+# PHASE_01_SYS_CORE — SYS_CORE 仕様書（v1.0 Final＋tickets修正）
 
 本ドキュメントは「加盟店サポート自動化プロジェクト v1.4」における  
 Phase 1：SYS_CORE（システム共通基盤）の最終仕様書である。
@@ -21,10 +21,11 @@ SYS_CORE が担う領域は次のとおり。
 - ログ基盤（生ログ／匿名化ログ）
 - エスカレーション基盤（通知ルール・条件判定）
 - API 通信共通層（curl ベース HttpClient）
+- チケット管理の最小コア（tickets テーブル）
 
 ## 1.2 前提思想の継承
 
-Phase 0（FOUNDATION）および base 仕様で定義された思想を継承する。
+Phase 0（FOUNDATION／DB_CORE）および base 仕様で定義された思想を継承する。
 
 - 加盟店から本部への質問を可能な限り 0 に近づける
 - エンドユーザーから加盟店への質問を可能な限り 0 に近づける
@@ -36,7 +37,10 @@ Phase 0（FOUNDATION）および base 仕様で定義された思想を継承す
 ## 1.3 範囲
 
 本フェーズでは「仕組みの土台」を対象とし、  
-個別のサービスオプション（例：電話代行）の具体挙動は後続フェーズで定義する。
+個別のサービスオプション（例：電話代行）の具体挙動は後続フェーズで定義する。  
+
+また、チケット管理テーブル `tickets` の**最小コア構造のみ**を本フェーズで定義し、  
+コメント・履歴・UI 表現などの詳細は AI-INBOX フェーズ以降で拡張する。
 
 ## 1.4 未決事項
 
@@ -59,10 +63,10 @@ Phase 0（FOUNDATION）および base 仕様で定義された思想を継承す
 2. 既存 DB フィールドと意味が重複する sys_params キーは作成しない（二重管理禁止）。
 3. 情報参照の優先順位は次のとおりとする。
 
-    DB（既存フィールド）
-     → sys_params（上書き用）
-     → .env（秘密情報・固定値）
-     → コード内デフォルト値（最終フォールバック）
+    DB（既存フィールド）  
+      → sys_params（上書き用）  
+      → .env（秘密情報・固定値）  
+      → コード内デフォルト値（最終フォールバック）
 
 4. 設計・実装時に、既存 DB と意味が被るパラメータ案が出た場合、  
    ChatGPT は必ず「確認項目」として提示し、二重管理回避の検討を行う。
@@ -121,7 +125,7 @@ SYS_CORE の主な配置は次のとおりとする。
           SmsClient.php         … Twilio ラッパ
           LineClient.php
           OpenAiClient.php
-          RemoteLockClient.php
+          RemoteLockClient.php  … v1.4 ではスタブ（インターフェースのみ）
 
 - HELP / LINE / SHOP / AI など各レイヤーから外部 API を利用する際は、  
   必ず上記 Clients 経由とする（直接 API を叩かない）。
@@ -141,7 +145,9 @@ SYS_CORE の主な配置は次のとおりとする。
 - OpenAiClient  
   モデル名・temperature・top_p 等を SysConfig から取得し、共通フォーマットで返却。
 - RemoteLockClient  
-  店舗別資格情報（既存 DB / 秘匿テーブル）を読み込み、PIN / ゲスト情報取得を統一化。
+  店舗別資格情報（既存 DB / 秘匿テーブル）を読み込み、PIN / ゲスト情報取得を行うインターフェース。  
+  v1.4 の時点では **スタブ実装** とし、実際の RemoteLock API 連携は  
+  後続フェーズ（LOCK_API 要素）で実装する。
 
 全クライアントは、呼び出し側が個別 API 仕様を意識せず利用できるよう、  
 共通レスポンス形式（例：status / code / data / error）を持つことを目標とする。
@@ -304,7 +310,45 @@ SYS_CORE の主な配置は次のとおりとする。
 
 ---
 
-## 4.4 🔧 パラメータ候補（データ構造関連）
+## 4.4 チケットテーブル：tickets（最小コア）
+
+### 決定事項
+
+spec_v1.4_base で「Phase1（SYS_CORE）に含める」とされた tickets について、  
+v1.4 時点では **共通チケット管理の最小コア構造のみ**を以下のように定義する。
+
+    TABLE tickets (
+      id               BIGINT PK AUTO_INCREMENT,
+      source_channel   VARCHAR(16) NOT NULL,   -- 'help' / 'line' / 'shop' / 'ai' / 'operator_mail' 等
+      source_type      VARCHAR(32) NOT NULL,   -- 'customer' / 'owner' / 'system' 等
+      shop_id          BIGINT NULL,
+      owner_id         BIGINT NULL,
+      customer_id      BIGINT NULL,
+      status           VARCHAR(16) NOT NULL,   -- 'open' / 'pending' / 'resolved' / 'closed'
+      priority         VARCHAR(16) NULL,       -- 'normal' / 'high' 等（将来用）
+      subject          VARCHAR(255) NULL,
+      summary          TEXT NULL,
+      created_at_utc   DATETIME NOT NULL,
+      updated_at_utc   DATETIME NOT NULL
+    );
+
+- Phase1 では「チケットの箱」を定義するに留める。
+- コメントスレッド、担当者アサイン、SLA、タグなどの詳細構造は  
+  後続フェーズ（AI-INBOX／管理UIフェーズ）にて `ticket_messages` 等の追加テーブルとして拡張する。
+
+### 未決事項
+
+- priority・status の値の標準セット（enum 化するか、マスタ化するか）。
+- AI-INBOX フェーズで追加するテーブル（ticket_messages 等）とのリレーション詳細。
+
+### 確認項目
+
+- 現状の運用・将来の AI-INBOX イメージに照らして、  
+  tickets の最小構造として不足しているフィールドがないか。
+
+---
+
+## 4.5 🔧 パラメータ候補（データ構造関連）
 
 - api_log_retention_days：60
 - sys_events_retention_years：3
@@ -477,19 +521,22 @@ SYS_CORE では、処理主体を明示するため以下を共通コンテキ�
 3. escalation_rules.rule_code の初期セット。
 4. SYSTEM_WARN → SYSTEM_CRITICAL への昇格基準（連続失敗・時間ベース等）。
 5. v1.4 で必須とする sys_events.event_type の最小セット。
+6. tickets.priority／tickets.status の値セット（enum／マスタ化方針）。
 
 これらは Phase 2 以降または実装段階でのチューニングで破綻しない粒度であり、  
 本フェーズの目的（仕組みの土台の確定）は達成されている。
 
-## 8.2 次フェーズ（AI_CORE）への引き継ぎ
+## 8.2 次フェーズ（AI_CORE／API_COMM）への引き継ぎ
 
 - SysConfig（パラメータ取得）
 - OpenAiClient（AI モデル呼び出し）
 - SysLogger / sys_events（AI 品質・KPI ログ）
 - SoR ポリシー（既存 DB 優先）
+- tickets（最小チケット構造）
+- escalation_rules（通知ルールの箱）
 
-これらを前提として、Phase 2 では AI コアの  
-入出力契約・内部ロジック・ログ連携を設計する。
+これらを前提として、Phase 2 では AI コアおよび API_COMM の  
+入出力契約・内部ロジック・ログ連携・チケット連携を設計する。
 
 ---
 
