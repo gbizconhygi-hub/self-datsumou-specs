@@ -1,27 +1,73 @@
 # 加盟店サポート自動化プロジェクト – 仕様書 v1.4（2025年11月）
 
+## 0. 本書の位置づけと関連ドキュメント
+
+本書（`spec_v1.4_base.md`）は、「加盟店サポート自動化プロジェクト v1.4」の
+
+- プロジェクト思想
+- 全体アーキテクチャ
+- 各サブドメイン（help./line./shop./ai./assets.）の役割
+- 外部サービス連携（STORES／ChatWork／LINE／SMS／OpenAI など）
+- フェーズを跨いで共通となる機能要求
+
+をまとめた **「プロダクト全体仕様」** である。
+
+インフラ構成・DBテーブル定義などの基盤仕様は、以下の Phase0 ドキュメントを正とする：
+
+- `PHASE_00_FOUNDATION.md`
+    - サーバ構成／サブドメイン／.env 方針
+    - ログ・バックアップ／エラーポリシー／タイムゾーン など
+- `PHASE_00_DB_CORE.md` ＋ `db_fields.yaml`
+    - `owners`／`shops`／`fee_*`／`shop_*`／`sales_records` など **基本DBテーブル・カラム** の詳細定義
+
+以降のフェーズ仕様（`PHASE_01_SYS_CORE.md`, `PHASE_02_AI_CORE.md` など）は、
+
+上記 Phase0 仕様を土台として、本書に記載の要件を満たす形で詳細設計を行う。
+
+---
+
 ## プロジェクト思想（Fundamental Principles）
 
-本プロジェクトの最終目的は、加盟店とエンドユーザー双方の  
+本プロジェクトの最終目的は、加盟店とエンドユーザー双方の
+
 「問い合わせを限りなくゼロに近づける」ことである。
 
-- 加盟店 → 本部 の質問を最小化する  
-  加盟店が運営中に疑問や不安を抱かずに済む状態をつくり、  
-  本部依存を減らして店舗運営のセルフ化を実現する。
+- 加盟店 → 本部 の質問を最小化する
+    
+    加盟店が運営中に疑問や不安を抱かずに済む状態をつくり、
+    
+    本部依存を減らして店舗運営のセルフ化を実現する。
+    
+- エンドユーザー → 加盟店 の質問を最小化する
+    
+    無人サロンの特性による不安や説明不足を解消し、
+    
+    顧客が自ら問題を解決できる体験（セルフサービス）を最大化する。
+    
+- 顧客に「ボット感」を感じさせない
+    
+    自動化＝冷たい・機械的 ではなく、
+    
+    「人間が丁寧に説明してくれている」ようなトーンを基本とする。
+    
 
-- エンドユーザー → 加盟店 の質問を最小化する  
-  無人サロンの特性による不安や説明不足を解消し、  
-  顧客が自ら問題を解決できる体験（セルフサービス）を最大化する。
+### 守るべき原則
 
-- 顧客に「ボット感」を感じさせない  
-  形式的・機械的な応答ではなく、人間味と理解の深さを備えた応答を行い、  
-  自動化＝冷たいものという固定観念を覆す体験価値を提供する。
+1. **オーナー・顧客の「時間」を奪わない設計**
+    - 無駄な入力・無駄な往復を減らし、最短で「知りたいこと」に到達できる導線にする。
+2. **「問い合わせ前提」ではなく「迷いにくい設計」優先**
+    - FAQを並べるよりも、「そもそも迷わないUI」「勝手に答えが目に入る構造」を重視する。
+3. **AIは「人間→AI→人間」の橋渡し役**
+    - AIで完結できない領域は、ためらわず本部や加盟店へエスカレートする。
+    - その際、AIが「要点整理・前処理」を行い、人が最小の工数で判断できるようにする。
+4. **フェーズごとに「実装しないこと」を明確にする**
+    - 例：RemoteLOCK 実連携は v1.4 では行わず、インターフェースのみ用意して将来に委ねる。
+5. **事なかれ主義で話を前に進めない**
+    - 小さな矛盾や違和感がある場合に、黙ってスルーしない。
+    - 「この前提のまま進めると後で不整合になる可能性がある」点は必ず指摘・整理する。
 
-- この思想を支える中核システムとして、  
-  「顧客AIチュートリアル（Web / LINE）」および  
-  「加盟店AIチュートリアル（Web）」を最重要モジュールと位置づける。  
+これらの原則は、Phase0〜Phase9 すべてのフェーズにおいて
 
-これらの思想は、すべての設計判断・仕様決定の基準とし、  
 各フェーズの優先順位や実装方針に一貫して適用されるものとする。
 
 ---
@@ -36,30 +82,56 @@
 
 ChatWork・メール・LINE・電話・予約など分散していた窓口を、
 
-**AI-INBOX（本部）と加盟店ポータル（shop.）に統一。**
+**AI-INBOX（本部）と加盟店ポータル（shop.）に統一**する。
+
+### ゴールイメージ
+
+- 顧客：Web／LINEから「人間味のあるAI」と会話し、ほぼ全ての疑問を解消できる。
+- 加盟店：AIが一次回答した上で、本部へ相談／MTG予約がスムーズに行える。
+- 本部：AI-INBOX から全チャネルの問い合わせ・売上・請求・契約状況が一元管理できる。
 
 ---
 
 ## 2. ドメイン構成
 
-| サブドメイン | 役割 | 補足 |
-| --- | --- | --- |
-| **help.self-datsumou.net** | 顧客AIチュートリアル（Web） | STORES・HPから来た顧客。AIチャット。メールで返信。 |
-| **line.self-datsumou.net** | LINEチュートリアル | LINEトークでAI応答／返信。 |
-| **shop.self-datsumou.net** | 加盟店ポータル | 顧客対応・申請・請求・AI相談・MTG予約。 |
-| **ai.self-datsumou.net** | 本部AI-INBOX | 全tickets統合／承認／請求／AI設定管理。 |
-| **assets.self-datsumou.net** | CDN | PDF・画像等。 |
-| **self-datsumou.net（root）** | メール送信ドメイン | SPF／DKIM／DMARC認証済み。 |
+| サブドメイン | 役割 |
+| --- | --- |
+| [help.self-datsumou.net](http://help.self-datsumou.net/) | 顧客向けWebチュートリアル（AIチャット＋メール） |
+| [line.self-datsumou.net](http://line.self-datsumou.net/) | LINE向けチュートリアル（LIFF＋Messaging API） |
+| [shop.self-datsumou.net](http://shop.self-datsumou.net/) | 加盟店ポータル（売上・請求・AI相談・MTG予約） |
+| [ai.self-datsumou.net](http://ai.self-datsumou.net/) | 本部ポータル（AI-INBOX／AIチューニング／KPI） |
+| [assets.self-datsumou.net](http://assets.self-datsumou.net/) | 画像・PDFなど静的アセット |
+
+アプリケーション構成・ディレクトリ配置・.envポリシーは
+
+`PHASE_00_FOUNDATION.md` に従う。
 
 ---
 
 ## 3. チャネル別顧客対応構造
 
-| チャネル | 顧客体験 | 回答経路 | チケットsource | 特徴 |
-| --- | --- | --- | --- | --- |
-| **Web (help.)** | ブラウザAIチャット | メール返信 | `'stores_form'` or `'hp_form'` | STORES・HPから。 |
-| **LINE (line.)** | LINEトーク | LINEメッセージ返信 | `'customer_line'` | LINE Messaging API連携。 |
-| **共通AIコア (shared/ai_core.php)** | 意図分類＋自然文生成 | — | — | どちらからも呼出し。 |
+### 3.1 顧客側
+
+- Web（help.）：
+    - FAQ検索＋AIチャット＋メールでのチケット化
+- LINE（line.）：
+    - 友だち追加 → トーク画面でAIが一次対応
+    - 必要に応じてチケットURLを返信（Web画面遷移）
+
+### 3.2 加盟店側
+
+- shop. からできること：
+    - 売上・請求の確認
+    - AIへの「本部相談」（テキスト）
+    - 本部とのMTG予約
+    - 備品発注
+
+### 3.3 本部側
+
+- ai. からできること：
+    - AI-INBOXで全チャネル問い合わせを一覧／対応
+    - AIコア設定・FAQ管理・トーン調整
+    - 加盟店ごとのKPIダッシュボード
 
 ---
 
@@ -67,31 +139,46 @@ ChatWork・メール・LINE・電話・予約など分散していた窓口を�
 
 ### 機能概要
 
-- 顧客・加盟店・本部すべてのチャネルで使用。
-- **分類・回答・自然言語生成・FAQ学習**を一元管理。
+- 顧客・加盟店・本部すべてのチャネルで共通のAIコアを使用。
+- **意図分類・回答生成・FAQ参照・ログ記録**を一元管理する。
 
 ### 管理UI（本部）
 
 - ai. 内に **AIコア設定管理UI** を標準搭載。
-- 機能：
+- 主な機能：
     - 意図分類パラメータCSVインポート／エクスポート
     - 質問パターン／回答テンプレート登録フォーム
-    - AIモデル調整（temperature／top_p）
+    - AIモデルパラメータ調整（temperature／top_p 等）
     - スコアしきい値設定（confidence閾値）
     - 辞書ベースルール管理（キーワード・除外語・緊急語）
 
-### パラメータDB
+### 入出力
 
-- `ai_core_params`: モデル／閾値／temperature／top_p
-- `ai_core_templates`: intentごとの回答テンプレ
-- `ai_core_patterns`: 質問言い回し例
+- 入力：
+    - 質問テキスト
+    - チャネル種別（web／line／shop／ai）
+    - ロール（customer／owner／hq）
+    - コンテキスト（過去ログ／関連FAQ）
+- 出力：
+    - 「回答テキスト」（人間味のある最終回答）
+    - 「意図（intent）」＋「カテゴリ」
+    - 「信頼度スコア」
+    - 「エスカレーション要否」（自動判定）
 
-### ロジック
+### データ構造（AIコア側）
+
+- 意図・パターン・テンプレート・ログなどのテーブルは
+Phase2（AI_CORE）で `ai_core_params`／`ai_core_templates` などとして実装する。
+（**詳細スキーマは `PHASE_02_AI_CORE.md` を参照**）
+
+### ロジック概要
 
 1. **分類**：FAQ候補抽出 → OpenAI推論でカテゴリ化＋スコア
-2. **回答生成**：FAQテンプレ＋チャネル別トーン＋生成文（人間味）
-3. **学習チューニング**：feedback結果でテンプレ修正・重み調整
-4. **本部UIで即反映**（AI-INBOX側から再学習不要）
+2. **回答生成**：FAQテンプレ＋チャネル別トーン＋生成文を組み合わせる
+3. **フォールバック**：
+    - スコアが低い／緊急ワード含む → チケット化＋人間へ
+4. **フィードバック学習**：
+    - 加盟店・本部からの評価（良い／悪い）でテンプレ／ルールを調整
 
 ---
 
@@ -99,50 +186,76 @@ ChatWork・メール・LINE・電話・予約など分散していた窓口を�
 
 ### 目的
 
-AIチュートリアル（Web／LINE）で**本人確認と顧客特定**を自動化する。
+AIチュートリアル（Web／LINE）で **本人確認と顧客特定** を自動化する。
 
-### 基本構成
+### APIキー管理（Phase0前提との整合）
 
-- 各店舗の `shop_secrets` に `stores_api_key`／`stores_api_secret` 登録済。
-- API連携で取得できる情報：
-    - 顧客プロフィール（名前・メール・電話）
-    - 予約情報（予約番号・日時・ステータス）
+- 店舗別の STORES API キー／シークレットは、`shop_secrets` テーブルの KV 形式で管理する（例）：
+    - `k = 'STORES_API_KEY'`
+    - `k = 'STORES_API_SECRET'`
+- 実際のテーブル定義は `PHASE_00_DB_CORE.md` の `shop_secrets` を参照。
 
 ### Webチュートリアル（help.）
 
-1. STORESの「お問い合わせ」リンクから遷移（URLパラメータに`store_code`埋込）。
-2. AIチャットで「お名前・電話番号・予約番号」を聞く。
-3. APIで顧客照合 → 本人確認 → チケット登録時に顧客特定情報紐付け。
+1. STORESの「お問い合わせ」リンクから遷移
+→ URLパラメータに `store_code`（= shops.code）を埋め込む。
+2. フォームに「名前／メール／電話」を入力 → メール認証リンク送信。
+3. メール認証完了後、STORES API と照合：
+    - `merchant_public_id` → `shops` を特定
+    - 顧客メール／電話から STORES 会員を特定
+4. 顧客特定完了後、AIチャット画面へ遷移し、
+直近予約や過去利用履歴に基づいた回答が可能になる。
 
 ### LINEチュートリアル（line.）
 
-1. LINEログイン（LIFF＋LINEログインチャンネル）でLINEユーザーID取得。
-2. STORES会員情報と照合 → 一度紐づけたら永続保持。
-3. 顧客発話から予約照会 → AI回答時に予約状況を参照可能。
+1. 友だち追加 → 「本人確認」ボタンタップ。
+2. LIFF で Webページを開き、STORES 会員情報と紐付け：
+    - STORES ログイン or メール認証
+3. 成功時：
+    - `customer_links` テーブルで LINEユーザID ↔ STORES会員ID を保存。
+4. 以降のトークでは、LINE ID から自動で顧客特定し、
+予約状況と連動した回答が可能になる。
 
-### 利用DB
+### 予約情報の利用
 
-- `shop_secrets`（キー管理）
-- `customer_links`（LINE ID／STORES顧客IDのマッピング）
+- 直近の予約日時／メニュー／ステータスを取得し、AIが回答時に参照する：
+    - 「○月○日の予約についてですね。」
+    - 「現時点でのステータスは◯◯です。」
 
 ---
 
-## 6. リモートロックAPI連携（入室確認）
+## 6. リモートロックAPI連携（入室確認／v1.4では構想のみ）
 
-### 目的
+### 目的（中長期）
 
-STORES予約情報とリモートロック解錠PINを突き合わせ、**本人確認→PIN提示**をAIチュートリアルで行う。
+STORES予約情報とRemoteLOCK解錠PINを突き合わせ、
 
-### 処理フロー
+**本人確認→解錠PIN提示** までを AI チュートリアル上で完結させる。
 
-1. リモートロック側アプリから既に発行済みゲスト情報を取得（API）。
+### v1.4 でのスコープ
+
+- v1.4 では **RemoteLOCK APIとの実通信は行わない**。
+- 既存の「キー自動発行アプリ」（他エンジニア作成）を将来統合しやすいよう、
+以下のみを実施する：
+    - RemoteLOCK 連携用インターフェース（例：`KeyInfoProviderInterface`）を用意
+    - デフォルト実装は「常に情報なし」を返すスタブ
+
+> ※ 実際のAPI連携（PIN取得／本人照合）は Phase9 以降の拡張スコープとする。
+> 
+
+### 将来の処理フロー（参考）
+
+1. RemoteLOCK 側アプリから既に発行済みゲスト情報を取得（API）。
 2. STORES予約APIで同一顧客・同一予約を照合。
-3. 本人一致 → **解錠PIN**をAIチャット（Web／LINE）に表示。
+3. 本人一致 → 解錠PINをAIチャット（Web／LINE）に表示。
 4. 不一致 → チケット化＋本部へエスカレーション。
 
-### APIキー管理
+### APIキー管理（将来）
 
-- `shop_secrets` に `remotelock_account_email`／`remotelock_api_key` カラム追加。
+- RemoteLOCK 親アカウント情報／APIキーは `shop_secrets` に保持する想定：
+    - `REMOTELOCK_PARENT_EMAIL`
+    - `REMOTELOCK_PARENT_PASSWORD`
+    - `REMOTELOCK_API_KEY` など
 
 ---
 
@@ -152,25 +265,26 @@ STORES予約情報とリモートロック解錠PINを突き合わせ、**本人
 
 オペレーターからの報告メール本文を自動解析し、
 
-AIが「報告」／「要対応」を分類。**要対応のみチケット化＋SMS＋ChatWork通知。**
+AIが「報告」／「要対応」を分類。**要対応のみチケット化＋SMS＋ChatWork通知** を行う。
 
 ### 処理概要
 
-1. 加盟店メールボックス（IMAP）をCronで定期チェック。
-2. メール本文→AIコアに解析依頼→分類JSON：
+1. 加盟店メールボックス（IMAP）を cron で定期チェック。
+2. メール本文 → AIコアに解析依頼 → 分類JSONを取得：
     
     ```json
     { "type": "要対応", "summary": "暗証番号が合わず入室できない" }
     
     ```
     
-3. 要対応の場合：
-    - チケット化（`source='operator_mail'`）
+3. `type="要対応"` の場合：
+    - チケット化（source=`operator_mail`）
     - ChatWork通知＋SMS追撃送信（高優先度）
 
-### テーブル
+### テーブル（Phase1以降）
 
-- `operator_mail_logs`（メールID／本文／分類結果／処理結果）
+- `operator_mail_logs`
+    - メールID／本文／分類結果／チケットID／処理結果など
 
 ---
 
@@ -178,27 +292,58 @@ AIが「報告」／「要対応」を分類。**要対応のみチケット化�
 
 ### a. AI相談（本部AIチャット）
 
-- 加盟店→AI一次回答→未解決→本部エスカレーション。
-- スレッド管理（`hq_chat_threads`／`hq_chat_messages`）。
-- チケット化リンク可能。
-- 本部画面からAIコア再利用可能。
+- 加盟店 → AI一次回答 → 未解決 → 本部エスカレーション。
+- スレッド管理：
+    - `hq_chat_threads`（スレッドヘッダ）
+    - `hq_chat_messages`（メッセージ）
+    - `hq_chat_links`（関連チケット・予約リンク）
+- 本部画面から AI コアを再利用し、回答のたたき台生成が可能。
 
 ### b. MTG予約
 
-- 本部側：`/ai/meetings_admin.php` で空き枠設定。
-- 加盟店側：`/shop/meetings.php` で予約。
-- 予約確定→メール＋ChatWork通知→前日／1h前リマインド。
+- 本部側：`/ai/meetings_admin.php` で空き枠設定（`hq_meeting_slots`）。
+- 加盟店側：`/shop/meetings.php` からMTG予約（`hq_meetings`）。
+- 通知：
+    - 予約確定時 → ChatWork／メールで双方に通知
+    - 直前リマインダー → cron で自動送信
 
 ---
 
-## 9. データベース構成（主要＋追加）
+## 9. データベース構成（概要）
 
-- `hq_chat_threads`／`hq_chat_messages`／`hq_chat_links`
-- `hq_meeting_slots`／`hq_meetings`
-- `audit_logs`（操作履歴）
-- `tutorial_feedbacks`（AI回答評価）
-- `operator_mail_logs`
-- `customer_links`（LINE ID↔STORES会員）
+本プロジェクトのDBは、
+
+1. **Phase0 基本DBコア**（オーナー／店舗／料金／売上 など）
+2. **フェーズ別の追加テーブル**（AIログ／通知／MTG／チケットなど）
+
+で構成する。
+
+### 9.1 Phase0 基本DBコア
+
+Phase0で次を定義済みとする（詳細は `PHASE_00_DB_CORE.md` / `db_fields.yaml`）：
+
+- `owners`／`owner_contacts` … オーナー／本部のマスタ＆担当者
+- `shops`／`shop_secrets`／`shop_links`／`shop_internal_info` … 店舗とその周辺情報
+- `options_master`／`shop_options` … 店舗オプション（運用フラグ）
+- `fee_items`／`fee_packages`／`package_components` … 課金アイテム・パッケージ
+- `shop_fee_package_assignments`／`shop_fee_addons`／`shop_royalty_history` … 店舗別契約・ロイヤリティ履歴
+- `supply_items`／`shop_supplies` … 備品マスタと発注履歴
+- `sales_records` … STORES売上データの統合テーブル
+
+### 9.2 フェーズ別の主な追加テーブル（例）
+
+- Phase1（SYS_CORE）
+    - `api_call_logs` … 外部API呼び出しログ
+    - `sys_params` … グローバル／店舗別パラメータストア
+    - `tickets` … チケット管理（顧客・加盟店・本部共通）
+- Phase2（AI_CORE）
+    - `ai_core_params` … モデル／閾値／パラメータ
+    - `ai_core_templates` … intentごとの回答テンプレ
+    - `ai_core_patterns` … 質問パターン
+    - `ai_logs`／`ai_feedbacks` … AI対話ログと評価
+- Phase3以降
+    - `shop_kpis` … 店舗別KPIサマリ
+    - `audit_logs` … 監査ログ など
 
 ---
 
@@ -207,11 +352,11 @@ AIが「報告」／「要対応」を分類。**要対応のみチケット化�
 | 区分 | 経路 | 備考 |
 | --- | --- | --- |
 | ChatWork | API通知（ROOM固定） | エスカレーション・請求・アラート・MTG確定 |
-| メール | PHP `mail()` | SPF／DKIM／DMARC認証済 |
-| SMS追撃 | Twilio | チケット未返信／オペレーター要対応案件 |
+| メール | PHP `mail()` or SMTP | SPF／DKIM／DMARC認証済 |
+| SMS追撃 | Twilio | チケット未返信／要対応案件 |
 | OpenAI API | HTTPS | AI分類・回答生成 |
 | STORES API | HTTPS | 顧客照合／予約確認 |
-| RemoteLock API | HTTPS | 解錠PIN取得 |
+| RemoteLock API | （将来）HTTPS | v1.4ではインターフェースのみ。実連携は将来実装。 |
 | LINE | Messaging API + LIFF | 顧客トーク／本人認証 |
 
 ---
@@ -220,58 +365,92 @@ AIが「報告」／「要対応」を分類。**要対応のみチケット化�
 
 ### a. 監査ログ
 
-`audit_logs` で全操作記録（user_id／role／action／entity／timestamp）。
+- `audit_logs` テーブル（Phase1以降）で全操作を記録：
+    - user_id／role／action／entity／timestamp／meta など
 
 ### b. 自動バックアップ
 
-毎日AM3:30にDB＋PDFをバックアップ（7世代保持）。
+- アプリレベル：
+    - 毎日 AM3:30 に DB＋請求PDF をバックアップ
+    - 7世代保持（直近1週間の即時復元を想定）
+- インフラレベル（Phase0 FOUNDATION準拠）：
+    - サーバスナップショット等で **少なくとも30日間** の復元ポイントを確保
 
 ### c. アラート通知
 
-システム例外を `system@`／ChatWorkに送信（自動レポート）。
-
-### d. スモークテスト
-
-`/shared/tests/smoke.php` でE2E通信確認。
+- 致命的エラー／API連携失敗／バッチ異常は、
+    - ChatWork（本部用ROOM）
+    - 場合によってはSMS
+        
+        へ通知する。
+        
 
 ---
 
 ## 12. セキュリティ／ポリシー
 
-- SSL／WAF有効化（Xserver標準）。
-- SPF／DKIM／DMARC完備。
-- .env は公開領域外（権限600）。
-- OpenAI通信・API通信はBearer認証＋TLS。
-- 顧客情報はマスキングしてAI投入。
-- PDF直リンク禁止（download.php経由）。
+- `.env` は公開ディレクトリ外に配置（`/self-datsumou.net/.env`）。
+- APIキー・パスワードは `.env` または `shop_secrets` にのみ保存。
+- 個人情報を含むログは保存期間を限定し、利用目的を明確化。
+- 管理画面（ai./shop.）は IP 制限／2段階認証を将来検討。
 
 ---
 
 ## 13. KPI・可視化・学習
 
-| 項目 | 内容 |
-| --- | --- |
-| 顧客AIチュートリアル | 自動解決率／追問率／チケット化率 |
-| 加盟店ポータル | 売上・体験数・AI対応率グラフ |
-| 本部INBOX | 店舗別AI正答率／満足度ランキング |
-| 学習フィードバック | `tutorial_feedbacks` 反映でFAQ改良提案をAIが提示 |
+### 主なKPI例
+
+- 店舗別売上（総額／顧客単価）
+- お試し体験件数・比率（`sales_records.is_trial`）
+- 問い合わせ件数（顧客／加盟店）
+- AI自己解決率／エスカレーション率
+- チケット対応時間（SLA）
+
+### 可視化
+
+- ai.（本部ポータル）でダッシュボード表示：
+    - 期間／店舗／オーナー単位でフィルタ
+    - 売上とAI自己解決率の相関など
+
+### 学習サイクル
+
+1. sales_records と AIログから店舗別・カテゴリ別の傾向を抽出
+2. FAQ／テンプレ／チュートリアル導線を更新
+3. AIコアのパラメータを調整
+4. 影響をKPIでトラッキング
 
 ---
 
 ## 14. FAQ管理・AIチューニングUI（本部）
 
-- CRUD管理：カテゴリ／質問文／回答文／キーワード。
-- CSVインポート／エクスポート対応。
-- AIコアの温度・スコア閾値設定をUIで調整可能。
-- 即時反映（キャッシュ自動更新）。
+- FAQカテゴリ管理
+- 質問・回答テンプレ編集
+- トーン設定（丁寧／カジュアルなど）
+- 緊急ワード・禁止ワード設定
+- フィードバック結果の一覧・再学習
+
+すべて ai. 側の管理画面から操作可能とする。
 
 ---
 
 ## 15. STORES売上取込・KPI集計
 
-- CSVアップロードまたはAPI取得。
-- `sales_records`に登録→`shop_kpis`集計。
-- ai.画面で期間別分析・ダッシュボード表示。
+- 月次または任意タイミングで、STORES管理画面から3種のCSVをダウンロード：
+    - 月謝・回数券CSV
+    - 都度カード売上CSV
+    - 現地決済CSV
+- 取込フロー：
+    1. 管理画面から CSV アップロード
+    2. 取込スクリプトが `sales_records` に統合形式で保存
+    3. BI／集計ロジックが `sales_records` からKPIを算出
+- 将来的に：
+    - `shop_kpis` テーブル（またはビュー）で月次サマリを保持し、
+        
+        ai. 画面で高速にダッシュボード表示できるようにする。
+        
+
+> sales_records の詳細カラム構成は PHASE_00_DB_CORE.md を参照。
+> 
 
 ---
 
@@ -280,40 +459,43 @@ AIが「報告」／「要対応」を分類。**要対応のみチケット化�
 | 名称 | 実行時刻 | 内容 |
 | --- | --- | --- |
 | `cron_invoices.php` | 毎月1日 03:00 | 請求PDF生成・送信 |
-| `cron_sms_followup.php` | 5分間隔 | 未返信チケット追撃 |
-| `cron_meeting_reminders.php` | 毎日 | MTG前日／1h前リマインド |
+| `cron_sms_followup.php` | 5分間隔 | 未返信チケット追撃SMS |
+| `cron_meeting_reminders.php` | 毎日 | MTG前日／1h前リマインド送信 |
 | `cron_operator_mail.php` | 15分間隔 | オペレーター報告メール解析・チケット化 |
-| `cron_backup.php` | 毎日 03:30 | DB・PDFバックアップ |
+| `cron_backup_db.php` | 毎日3:30 | DBバックアップ（7世代保持） |
+| `cron_sales_import.php` | 月次 or 任意 | STORES売上CSV取込 → `sales_records` 更新 |
 
 ---
 
 ## 17. 導入・リリースフロー
 
-| フェーズ | 内容 | 状態 |
-| --- | --- | --- |
-| 環境構築 | ドメイン／DB／SSL／DNS／メール設定 | 完了 |
-| 外部キー取得 | ChatWork／Twilio／LINE／OpenAI／STORES／RemoteLock | 完了 |
-| パッケージ展開 | v1.4 Final ZIP配置 | 次工程 |
-| 実データ投入 | owners／shops／intents／sales_records | 導入時実施 |
-| 検証 | selfcheck／smokeテスト | リリース前 |
-| 本番リリース | 2026-01-01 | 予定 |
+| ステップ | 内容 |
+| --- | --- |
+| 設計確定 | Phase0（FOUNDATION／DB_CORE）および本書 v1.4 を確定 |
+| 開発 | Phase1（SYS_CORE）→ Phase2（AI_CORE）→ UI 実装 |
+| テスト | スモークテスト／結合テスト／負荷簡易テスト |
+| owners／shops 初期データ投入 | 既存店舗のオーナー・店舗情報を登録 |
+| fee_*／shop_* 契約反映 | 契約情報をDBに投入（ロイヤリティ・パッケージ等） |
+| sales_records 初期投入 | 過去分STORES CSVの取込（必要に応じて） |
+| 検証 | 本部・一部加盟店で検証運用 |
+| 本番リリース | 2026-01-01 予定 |
 
 ---
 
 ## 18. 今後の拡張
 
 - Google Calendar双方向連携（MTG予約）。
-- STORES API完全自動取込。
-- RemoteLock制御統合。
+- STORES APIによる完全自動取込（CSV不要化）。
+- RemoteLOCK 制御の本格統合（解錠／施錠ログ連携）。
 - AIコア強化（fine-tuning／embedding学習）。
-- マルチブランド展開時のDB分離モード。
+- マルチブランド展開時の DB 分離モード（ブランド別スキーマ／テナント分離）。
 
 ---
 
 ## ✅ 総括
 
-- 顧客AIチュートリアル（Web／LINE）は体験を分け、AIコアを共有。
-- 加盟店↔本部のAIチャット・MTG予約まで一気通貫。
-- STORES・RemoteLock・OpenAI・Twilio・ChatWorkを連携。
-- 本部UIからAIの**閾値・テンプレ・FAQ**を直接チューニング。
-- AIが“人間らしく、かつ正確に”対応し、最終的には**顧客満足・加盟店業務効率・本部運用効率**を同時に最大化。
+- 顧客向けAIチュートリアル（Web／LINE）は体験を分けつつ **AIコアを共有**。
+- 加盟店↔本部のAI相談・MTG予約まで一気通貫で扱える。
+- STORES・OpenAI・Twilio・ChatWork などと連携しつつ、RemoteLOCK は v1.4 ではインターフェースのみ実装。
+- 本部UIから AI の「閾値・テンプレ・FAQ」を直接チューニング可能。
+- 最終的に、**顧客満足・加盟店業務効率・本部運用効率** の三つを同時に最大化することを目指す。
