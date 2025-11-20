@@ -2,15 +2,19 @@
 
 ## 1. 目的・範囲
 
-### 1.1 目的
+### 1.1 フェーズ概要
 
-本フェーズ（Phase 2：AI_CORE）は、以下 4 チャネルのすべてから共通で呼び出される
+本フェーズ（Phase 2：AI_CORE）は、以下 4 チャネルすべてから共通で呼び出される
 
 「AIコア（意図分類＋回答生成＋フォールバック＋ログ）」の仕様を定義する。
 
-- エンドユーザー：`help.`（Web）／`line.`（LINE）
-- 加盟店：`shop.`（オーナーポータル）
-- 本部：`ai.`（本部管理画面）
+- エンドユーザー向け
+    - `help.self-datsumou.net`（Webチュートリアル）
+    - `line.self-datsumou.net`（LINE公式アカウント）
+- 加盟店向け
+    - `shop.self-datsumou.net`（オーナーポータル・加盟店チュートリアル）
+- 本部向け
+    - `ai.self-datsumou.net`（本部管理画面）
 
 AI_CORE の主な役割：
 
@@ -22,21 +26,24 @@ AI_CORE の主な役割：
 - Phase1 で定義した SYS_CORE（`SysConfig` / `SysLogger` / `SysEscalation` / `tickets` 等）と連携し、
 AI 応答ログとチューニング用メタ情報を一貫して記録・活用できる状態を作る。
 
-### 1.2 範囲
+### 1.2 本フェーズの範囲
 
 本フェーズで扱うもの：
 
 - AI_CORE の I/O 契約（AI_CORE_REQUEST / AI_CORE_RESPONSE）
-- AI_CORE 内部の処理フロー（インテント分類〜フォールバック判断）
+- インテントマスタ（`ai_intents_master`）の設計
+- Q&A テーブル（`ai_qa_entries`）の設計
+- 軽量シナリオ（最大 2〜3 ステップ）の扱い方
 - AI 会話ログのデータ構造（`ai_sessions` / `ai_turns`）と `tickets` との紐づけ
 - LLM 呼び出しの基本方針（SYS_CORE 経由、モデル指定、閾値の考え方）
+- セルフ解決率（`is_self_solved`）の定義と KPI 前提
 
-本フェーズで扱わない（別フェーズで定義する）もの：
+本フェーズでは扱わない（他フェーズで定義する）もの：
 
-- 各チャネルの UI／文言（画面ラフ・ボタン配置など）
-- STORES予約／RemoteLOCK との具体的な API I/O（Phase3：API_COMM）
-- FAQ／シナリオ／テンプレ本文そのものの管理画面仕様
-- 「セルフ解決しました」など、ユーザーからの明示フィードバック UI 詳細（チュートリアル層フェーズ）
+- 各チャネルの UI／画面遷移（ボタン配置、入力フォーム等）
+- STORES予約／RemoteLOCK など外部 API の具体的な I/O（Phase3：API_COMM）
+- FAQ／シナリオ／テンプレ本文そのものの編集画面仕様（管理 UI）
+- 「解決しました／まだです」ボタンや後追い確認の UI 詳細（顧客／加盟店チュートリアルフェーズ）
 
 ---
 
@@ -49,41 +56,43 @@ AI 応答ログとチューニング用メタ情報を一貫して記録・活�
     - 加盟店：`shop.self-datsumou.net`
     - 本部：`ai.self-datsumou.net`
 - 共通ライブラリ構造
-    - `shared/` 配下に共通機能を集約する方針
-    - AI_CORE は `shared/ai_core.php`（仮称）として実装される前提
+    - `shared/` 配下に共通機能を集約する。
+    - AI_CORE は `shared/ai_core.php`（仮称）として実装される前提。
 
 ### 2.2 DB コア（PHASE_00_DB_CORE / db_fields.yaml）
 
-- 主な既存テーブル（抜粋）
+- 既存テーブル（抜粋）
     - `owners`：オーナー情報
     - `shops`：店舗マスタ
     - `shop_secrets`：店舗別シークレット（APIキー等）
     - `options_master`：全体設定マスタ
     - `shop_options`：店舗別設定（`options_master` の上書き）
-- AI_CORE は、これらのテーブルを参照しつつ、
-AI会話ログ用に新規テーブル（`ai_sessions` / `ai_turns`）を追加する。
+- AI_CORE は、これらを参照しつつ、以下の新規テーブルを追加する：
+    - インテントマスタ：`ai_intents_master`
+    - Q&Aマスタ：`ai_qa_entries`
+    - 会話セッション：`ai_sessions`
+    - ターンログ：`ai_turns`
 
 ### 2.3 SYS_CORE 連携（PHASE_01_SYS_CORE）
 
-- SYS_CORE の責務（要点）
+- SYS_CORE の責務（要約）
     - `SysConfig`：`options_master` / `shop_options` / `.env` から有効な設定値を解決
     - `SysLogger`：`api_call_logs` / `sys_events` / `tickets` など共通ログの窓口
     - `SysEscalation`：ChatWork／メール／SMS／チケット化など有人対応窓口
     - HTTPクライアント：OpenAI／STORES／RemoteLOCK 等の外部API呼び出し共通レイヤー
-- AI_CORE からの呼び出し方針
-    - LLM 呼び出しは必ず SYS_CORE の HTTP クライアント経由とし、
-    AI_CORE は API キーやベースURLを直接扱わない。
+- AI_CORE からの呼び出し方針（決定事項）
+    - LLM 呼び出しは **必ず SYS_CORE の HTTP クライアント経由** とし、AI_CORE は API キー／ベースURL を直接扱わない。
 
 ### 2.4 トーン／スタイル方針（共通ルール）
 
-- エンドユーザー向け（help./LINE）
-    - 「人間が丁寧に説明している」トーン
-    - 顔文字や柔らかめの表現を適度に使用し、機械感を減らす
-- 加盟店向け（shop.）
-    - ぶっきらぼう NG
-    - 疑問や不安に寄り添うトーン
-- 本部向け（ai.）
-    - 事務的だが冷たすぎない、簡潔で誤解のない説明
+- エンドユーザー（help./LINE）
+    - 「人間が丁寧に説明している」トーン。
+    - 顔文字や柔らかめの表現を適度に使用し、機械感を減らす。
+- 加盟店（shop.）
+    - ぶっきらぼう NG。
+    - 疑問や不安に寄り添うトーン。
+- 本部（ai.）
+    - 事務的だが冷たすぎない、簡潔で誤解のない説明。
 
 AI_CORE のプロンプト／テンプレは、このトーン方針を前提とする。
 
@@ -91,78 +100,90 @@ AI_CORE のプロンプト／テンプレは、このトーン方針を前提と
 
 ## 3. 新規決定事項
 
-### 3.1 決定事項
+### 3.1 決定事項（確定）
 
-1. 頭脳は 1 つ・チャネル差はパラメータで吸収
+1. **頭脳は 1 つ、チャネル差はパラメータで吸収**
     - help. / line. / shop. / ai. は、すべて共通の AI_CORE を利用する。
-    - チャネル差（顧客／加盟店／本部）は、プロンプト・温度・履歴長さなどのパラメータで吸収する。
-2. LLM 呼び出しは SYS_CORE 経由
+    - チャネル差（顧客／加盟店／本部）は、プロンプト・温度・履歴長さ・スタイルなどのパラメータで吸収する。
+2. **LLM 呼び出しは SYS_CORE 経由**
     - AI_CORE は LLM を直接叩かず、SYS_CORE 提供の HTTP クライアントを通じて実行する。
-    - モデル名やベースURL、APIキーは `.env` / `shop_secrets` / `options_master` から `SysConfig` が解決。
-3. STORES／RemoteLOCK との役割分担
-    - AI_CORE：
-        - インテント分類
-        - 「これは予約変更フロー」「これは解錠番号フロー」などのルーティング判断
-    - API_COMM：
-        - 実際の STORES／RemoteLOCK API 呼び出し
-        - 取得データを元にした最終値（予約情報・解錠番号など）の決定
-4. モデル指定はすべてパラメータ管理
-    - コードにモデル名を固定せず、
-        - `ai_core.default_model`
-        - `ai_core.model_per_channel.help`
-        - `ai_core.model_per_channel.shop` など
-        を `options_master` / `shop_options` 経由で指定可能にする。
-5. チャネル別“性格”設定
-    - 温度・max_tokens・履歴ターン数などは`ai_core.temperature.*` / `ai_core.max_tokens.*` / `ai_core.max_history_turns.*` といったキーで管理。
-    - 初期値は「安全寄り」（暴れすぎない／過激な生成を避ける）で設定する。
-6. インテント信頼度とフォールバック方針
-    - 加盟店→本部エスカレーション
-        - 「なるべくAIで踏ん張る」「かなり慎重にエスカレーション」
-        - よほど信頼度が低い／危険（クレーム・法的リスク等）でない限り即チケット化しない。
-    - 顧客→加盟店エスカレーション
-        - 「なるべくAIで踏ん張る」前提。
-        - 予約や解錠番号など、AIだけで完結しづらいものだけをエスカレーション候補とする。
-    - リリース初期も、「ある程度 AI に任せる」方向でスタートし、ログを見ながら閾値をチューニングする。
-7. ログ構造：`ai_sessions` / `ai_turns` の二層構造を採用
-    - `ai_sessions`：会話単位のメタ情報（チャネル／店舗／解決状況など）
-    - `ai_turns`：個々の発話単位（ユーザー発話／AI応答／インテント／トークン数など）
-8. `tickets` への `ai_session_id` 追加
-    - `tickets` テーブルに `ai_session_id` カラムを追加し、
-    「このチケットはどのAI会話から生まれたか」を辿れるようにする。
-9. セッション切断の共通ルール
-    - 「最終アクティビティから 15 分以上経過したら、新規セッションとして扱う」
-    - このルールは全チャネル共通とする（Phase2 時点）。
-10. 生テキストログと PII の扱い
-    - 個人情報が含まれていないと意味をなさないログは「短期間のみフルテキスト保持」。
-    - マスク後も意味があるログは、マスク済みで長期間保持。
-    - 個人情報特定につながる情報（電話番号・メール・予約番号 等）は、一定期間後にマスキングする。
-    - ログ量がシステムに負荷をかけない範囲に収まるよう、保持期間・マスキングで調整する。
-11. 加盟店からのログ閲覧粒度
-    - 自動応答も含め、店舗ごとの会話履歴は `shop.` から閲覧可能とする（PIIマスク適用前提）。
-12. KPI としてのセルフ解決率
-    - `ai_sessions` に「セルフ解決フラグ」を持ち、
-    セルフ解決率を KPI として本部内部で追う。
-    - 加盟店には「セルフ解決率を数値として見せる」ことは想定せず、
-    本部のプロジェクト評価・改善指標として利用する。
+    - モデル名やベースURL、APIキーは `.env` / `shop_secrets` / `options_master` から `SysConfig` が解決する。
+3. **インテントマスタは専用テーブル `ai_intents_master` で管理**
+    - インテントごとに `intent_key` / `category` / `subcategory` / `label` / `handling_profile` などを持つ。
+    - インテントは 本部 UI から追加・削除・変更可能にする想定。
+4. **Q&A は 1 テーブル `ai_qa_entries`＋フラグで顧客／加盟店を区別**
+    - `target_type`（customer／merchant／hq）で対象を区別する。
+    - `channel_scope`（help／line／shop／ai）で利用チャネルを指定する。
+    - 共通Q&Aの共通管理（両方に見せたいもの）も可能。
+5. **回答生成は「Q&Aテンプレ＋LLM整形」のハイブリッド方式**
+    - `ai_qa_entries.answer_template` は「何を言うか」のガイドライン（マニュアル相当）。
+    - 実際の返答は、LLM に
+        - ユーザー発話
+        - インテント情報
+        - answer_template／question_examples
+        を渡し、「人間が説明しているような自然な文」に整形させる。
+6. **シナリオ（ステップ型）は v1.4 では「最大 2〜3 ステップの直列質問」に限定**
+    - 複雑な条件分岐エンジンは実装対象外。
+    - 必要なインテント（解錠番号／解約説明など）だけが `followup_question_1` / `followup_question_2` を使う想定とする。
+7. **インテントごとの扱いは `handling_profile` ＋ パラメータで制御**
+    - `ai_intents_master.handling_profile`
+        - `normal`：通常の問い合わせ
+        - `cautious`：慎重に扱いたい（鍵・契約・お金系など）
+        - `escalate_prefer`：基本、人に回した方がよいもの
+    - プロファイルごとの閾値（high／low）は `options_master` 側の設定値で制御し、コードに固定値は持たない。
+8. **会話ログ構造は `ai_sessions` / `ai_turns` の二層構造**
+    - `ai_sessions`：1件の相談（1ユーザー・1トピック）の単位。チャネル／店舗／解決状況／セルフ解決フラグなどを持つ。
+    - `ai_turns`：各発話（ユーザー／AI／system）のログ。インテント・回答種別・メタ情報を保持する。
+9. **`tickets` への `ai_session_id` 追加**
+    - `tickets` テーブルに `ai_session_id` を追加し、「このチケットはどのAI会話から生まれたか」を辿れるようにする。
+10. **セルフ解決率の定義と 24 時間ルール**
+    - `ai_sessions.is_self_solved = 1`
+        - ユーザー（顧客／加盟店）が、**AI／チュートリアルのみ**で解決したと明示した場合のみ 1。
+        - 具体的には、チャット内で「解決しました」ボタンに相当する操作が 24 時間以内に行われた場合。
+    - それ以外（人間介入や反応なし）は、`is_self_solved = 0`。
+    - セルフ解決率の分母は「24時間以内に判定できたセッション」に限定し、
+    判定不能なものは「Unknown」として別カウントする。
+11. **ログ／PII の保持日数（初期方針）**
+    - `ai_turns`（フルテキスト：PII含む可能性）
+        - フルテキスト保持：90 日
+        - 90 日経過後、電話番号・メール・予約番号などをマスキングした上で残す。
+    - `ai_turns`（マスク済みテキスト）
+        - マスク後のログ保持：3 年（1095 日）を初期値とする。
+    - `ai_sessions`（メタ情報）
+        - 保持：5 年（もしくは無期限運用前提。実運用で調整）
+12. **チャネルごとのセルフ解決判定の扱い**
+    - help.（Web）
+        - セッション内で「この回答で解決しましたか？」を聞き、24 時間以内の反応のみ `is_self_solved` 判定に使う。
+        - D+1 フォローなどのプッシュは help. 単体では行わない。
+    - LINE
+        - セッション内の ✅／❌に加え、必要であれば D+1 フォローを送る設計も許容。
+        - 判定基準自体は 24 時間ルールで統一。
+    - shop.（加盟店）
+        - チャット内の「解決しました」操作、または「未解決の相談一覧」からの「解決済み」操作で `resolved_status` を更新。
+        - セルフ解決率は、あくまで AI／チュートリアルのみで解決したものに限る。
 
-### 3.2 未決事項（Phase2 内での検討対象）
+---
 
-- インテントマスタの具体的な保存方式
-    - 専用テーブル（例：`ai_intents_master`）を設計するか、`options_master` の一カテゴリとして扱うか。
-- FAQ／シナリオデータのテーブル構成
-    - AI_CORE フェーズで最低限の構造まで定義するか、
-    チュートリアル層フェーズで集中的に扱うか。
-- 閾値・保持期間の具体値
-    - 各種信頼度閾値（high/low）
-    - フルテキスト保持日数／マスキングまでの猶予期間
+### 3.2 未決事項（Phase2 内で別途検討／後続フェーズで詳細化）
 
-これらは、数値やテーブル構造の具体案を出した上で、このフェーズ内で確定させる。
+1. `channel_scope` と `question_examples` の内部フォーマット詳細
+    - `channel_scope`
+        - 文字列カンマ区切り（例：`"help,line"`）とするか、ビットフラグとするか。
+    - `question_examples`
+        - TEXT に改行区切りで複数例を格納するか、JSON 配列にするか。
+2. CSV フォーマットの細部
+    - `question_examples` の区切り文字（改行 vs `||`）
+    - インポート／エクスポートツールの具体仕様（管理画面 or バッチ）
+3. `handling_profile` ごとのデフォルト閾値 (`conf_high` / `conf_low`)
+    - 初期案は本仕様内で推奨値を出すが、最終値は運用開始前に本部で決定。
+4. ログ保持期間の最終値
+    - 90 日／3 年／5 年案をベースに、規約・顧問の意見を踏まえて最終値を決定。
 
 ---
 
 ## 4. データ構造 / I/O 定義
 
-### 4.1 AI_CORE_REQUEST（入力）
+### 4.1 AI_CORE_REQUEST（入力）構造
 
 ```json
 {
@@ -170,9 +191,11 @@ AI_CORE のプロンプト／テンプレは、このトーン方針を前提と
   "channel": "help | line | shop | ai",    // 呼び出し元チャネル
   "actor_type": "customer | merchant | hq",// ユーザー種別
   "tenant_code": "hygi",                   // 将来のマルチテナント拡張用（v1.4では固定想定）
-  "shop_id": 123,                          // 対象店舗ID（不明な場合はnull）
+
+  "shop_id": 123,                          // 対象店舗ID（不明時はnull）
   "owner_id": 456,                         // 加盟店オーナーID（加盟店チャット時）
-  "end_user_id": "string-or-null",         // 会員ID／LINE IDなど（匿名の場合はnull）
+  "end_user_id": "string-or-null",         // エンドユーザーID（会員ID／LINE ID等）
+
   "locale": "ja-JP",
   "timezone": "Asia/Tokyo",
 
@@ -202,7 +225,7 @@ AI_CORE のプロンプト／テンプレは、このトーン方針を前提と
     },
     "runtime_flags": {
       "debug_mode": false,
-      "force_intent": null                 // デバッグ用のインテント固定（通常運用ではnull）
+      "force_intent": null                 // デバッグ用インテント固定（通常運用ではnull）
     }
   },
 
@@ -215,12 +238,12 @@ AI_CORE のプロンプト／テンプレは、このトーン方針を前提と
 
 ```
 
-### 4.2 AI_CORE_RESPONSE（出力）
+### 4.2 AI_CORE_RESPONSE（出力）構造
 
 ```json
 {
   "request_id": "uuid-string",        // 入力と同じID
-  "ai_session_id": 9999,              // AIセッションID（新規セッションの場合はここで採番結果を返す）
+  "ai_session_id": 9999,              // AIセッションID（新規セッションなら採番結果）
 
   "reply_text": "string",             // ユーザーに返却するメイン応答文
   "reply_text_alt": [                 // （任意）代替案／分割用テキスト
@@ -228,21 +251,27 @@ AI_CORE のプロンプト／テンプレは、このトーン方針を前提と
   ],
 
   "intent": {
-    "key": "faq.booking.change",      // インテントキー（マスタ参照）
+    "key": "faq.booking.change",      // インテントキー（ai_intents_master.intent_key）
     "label": "予約変更・キャンセル",
     "confidence": 0.87                // 0〜1 のスコア
   },
 
   "classification": {
     "category": "booking",           // 大分類
-    "subcategory": "change",         // 小分類
-    "urgency": "normal | high | low" // 緊急度（クレーム／鍵トラブル等）
+    "subcategory": "change",         // 中分類
+    "urgency": "normal | high | low" // 緊急度（鍵・クレーム等）
   },
 
   "answer": {
-    "type": "faq | scenario | template | generated | handoff",
-    "source_id": 1234,               // FAQやシナリオID（無い場合はnull）
-    "reason": "high_confidence_faq"  // 採用理由（ログ／デバッグ用）
+    "type": "faq | scenario_step | clarify | handoff",
+    "source_qa_id": 1234,            // 使用したai_qa_entries.id（無い場合はnull）
+    "reason": "high_confidence_faq"  // ロジック上の採用理由（ログ／デバッグ用）
+  },
+
+  "followup": {
+    "needed": false,                 // 追加質問が必要か（シナリオ／確認フロー）
+    "question": null,                // 次にユーザーへ投げるフォローアップ質問文
+    "step_index": null               // シナリオ内のステップ番号（1,2…）
   },
 
   "escalation": {
@@ -273,20 +302,92 @@ AI_CORE のプロンプト／テンプレは、このトーン方針を前提と
 
 ```
 
-### 4.3 ログ用データモデル（DDL案）
+### 4.3 DB テーブル定義（DDL 案）
 
-### 4.3.1 `ai_sessions`（会話単位）
+### 4.3.1 インテントマスタ `ai_intents_master`
+
+```sql
+CREATE TABLE ai_intents_master (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT 'インテントID',
+  intent_key VARCHAR(191) NOT NULL COMMENT 'インテントキー（例：booking.change）',
+  category VARCHAR(64) NULL COMMENT '大分類（booking / contract / lock / complaint 等）',
+  subcategory VARCHAR(64) NULL COMMENT '中分類（change / cancel / code 等）',
+  detail_label VARCHAR(191) NULL COMMENT 'さらに細かい分類ラベル（必要に応じて使用、NULL可）',
+
+  label_ja VARCHAR(191) NOT NULL COMMENT '日本語表示名（例：予約変更・キャンセル）',
+  description TEXT NULL COMMENT '用途説明',
+
+  handling_profile ENUM('normal','cautious','escalate_prefer')
+    NOT NULL DEFAULT 'normal' COMMENT '扱いプロファイル（通常／慎重／エスカレ優先）',
+
+  target_type_scope VARCHAR(64) NOT NULL DEFAULT 'customer,merchant'
+    COMMENT '対象ユーザー種別の範囲（customer,merchant,hq のカンマ区切り）',
+
+  priority INT NOT NULL DEFAULT 0 COMMENT '一覧表示やマッチングの優先度',
+  is_active TINYINT(1) NOT NULL DEFAULT 1 COMMENT '有効フラグ',
+
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NOT NULL,
+
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_ai_intents_intent_key (intent_key),
+  KEY idx_ai_intents_category (category, subcategory)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='AIインテントマスタ';
+
+```
+
+### 4.3.2 Q&A マスタ `ai_qa_entries`
+
+```sql
+CREATE TABLE ai_qa_entries (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT 'Q&AエントリID',
+  intent_id BIGINT UNSIGNED NOT NULL COMMENT '紐づくインテントID（ai_intents_master.id）',
+
+  target_type ENUM('customer','merchant','hq')
+    NOT NULL COMMENT '対象ユーザー種別',
+  channel_scope VARCHAR(64) NOT NULL DEFAULT 'help,line,shop,ai'
+    COMMENT '利用チャネル（help,line,shop,ai のカンマ区切り）',
+
+  question_title VARCHAR(191) NOT NULL COMMENT '管理用タイトル（例：予約時間の変更）',
+  question_examples TEXT NULL COMMENT '代表的な質問例（複数の場合は区切り文字 or 改行）',
+
+  answer_template TEXT NOT NULL COMMENT '回答テンプレート（マニュアル的な骨子）',
+  answer_type ENUM('faq','scenario_entry') NOT NULL DEFAULT 'faq'
+    COMMENT 'faq：1発回答／scenario_entry：ステップ型フローの入口',
+
+  followup_question_1 TEXT NULL COMMENT 'ステップ型で最初に聞く質問（例：お名前を教えてください）',
+  followup_question_2 TEXT NULL COMMENT '必要に応じた2つ目の質問（例：ご予約日時を教えてください）',
+
+  priority INT NOT NULL DEFAULT 0 COMMENT '同一インテント内での優先度',
+  is_active TINYINT(1) NOT NULL DEFAULT 1 COMMENT '有効フラグ',
+
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NOT NULL,
+
+  PRIMARY KEY (id),
+  KEY idx_ai_qa_intent (intent_id),
+  KEY idx_ai_qa_target (target_type)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='AI Q&Aエントリ';
+
+```
+
+### 4.3.3 会話セッション `ai_sessions`
 
 ```sql
 CREATE TABLE ai_sessions (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT 'AIセッションID',
+
   channel ENUM('help','line','shop','ai') NOT NULL COMMENT 'チャネル種別',
   actor_type ENUM('customer','merchant','hq') NOT NULL COMMENT 'ユーザー種別',
   tenant_code VARCHAR(32) NOT NULL DEFAULT 'hygi' COMMENT 'テナントコード（将来拡張用）',
+
   shop_id BIGINT NULL COMMENT '対象店舗ID（不明時NULL）',
   owner_id BIGINT NULL COMMENT '加盟店オーナーID',
   end_user_id VARCHAR(191) NULL COMMENT 'エンドユーザーID（会員ID／LINE ID等）',
   channel_session_key VARCHAR(191) NULL COMMENT 'チャネル固有セッションキー（LINE userId等）',
+
+  current_intent_key VARCHAR(191) NULL COMMENT '現在の主要インテントキー（最後に確定したもの）',
+  state_json JSON NULL COMMENT 'シナリオ進行状況などの状態保持（必要に応じて使用）',
 
   started_at DATETIME NOT NULL COMMENT 'セッション開始日時',
   last_activity_at DATETIME NOT NULL COMMENT '最終アクティビティ日時',
@@ -294,20 +395,22 @@ CREATE TABLE ai_sessions (
 
   resolved_status ENUM('unknown','resolved_by_ai','resolved_by_human','abandoned')
     NOT NULL DEFAULT 'unknown' COMMENT '解決ステータス',
-  is_self_solved TINYINT(1) NOT NULL DEFAULT 0 COMMENT 'セルフ解決できたか',
+  is_self_solved TINYINT(1) NOT NULL DEFAULT 0 COMMENT 'セルフ解決できたか（24時間以内に明示があった場合のみ1）',
 
   created_at DATETIME NOT NULL,
   updated_at DATETIME NOT NULL,
+
   PRIMARY KEY (id),
   KEY idx_ai_sessions_channel (channel),
   KEY idx_ai_sessions_shop (shop_id),
   KEY idx_ai_sessions_owner (owner_id),
-  KEY idx_ai_sessions_end_user (end_user_id)
+  KEY idx_ai_sessions_end_user (end_user_id),
+  KEY idx_ai_sessions_intent (current_intent_key)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='AI会話セッション';
 
 ```
 
-### 4.3.2 `ai_turns`（発話単位）
+### 4.3.4 ターンログ `ai_turns`
 
 ```sql
 CREATE TABLE ai_turns (
@@ -315,7 +418,7 @@ CREATE TABLE ai_turns (
   ai_session_id BIGINT UNSIGNED NOT NULL COMMENT '紐づくAIセッションID',
 
   direction ENUM('user','assistant','system') NOT NULL COMMENT '発話方向',
-  role_label VARCHAR(64) NOT NULL COMMENT '役割ラベル（user/customer/merchant/hq等）',
+  role_label VARCHAR(64) NOT NULL COMMENT '役割ラベル（user/customer/merchant/hq 等）',
 
   user_message TEXT NULL COMMENT 'ユーザー発話（direction=user時）',
   reply_text TEXT NULL COMMENT 'AI応答（direction=assistant時）',
@@ -324,8 +427,8 @@ CREATE TABLE ai_turns (
   intent_label VARCHAR(191) NULL COMMENT 'インテント表示名',
   intent_confidence DECIMAL(4,3) NULL COMMENT 'インテント信頼度（0.000-1.000）',
 
-  answer_type ENUM('faq','scenario','template','generated','handoff') NULL COMMENT '回答種別',
-  answer_source_id BIGINT NULL COMMENT '回答ソースID（FAQ/シナリオ等）',
+  answer_type ENUM('faq','scenario_step','clarify','handoff') NULL COMMENT '回答種別',
+  answer_source_qa_id BIGINT NULL COMMENT '回答ソースのQ&A ID（ai_qa_entries.id）',
 
   escalation_action ENUM('none','create_ticket','transfer_to_human') NULL COMMENT 'エスカレーションアクション',
   escalation_reason VARCHAR(191) NULL COMMENT 'エスカレーション理由',
@@ -339,6 +442,7 @@ CREATE TABLE ai_turns (
   error_code VARCHAR(64) NULL COMMENT 'エラー時コード',
 
   created_at DATETIME NOT NULL,
+
   PRIMARY KEY (id),
   KEY idx_ai_turns_session (ai_session_id),
   KEY idx_ai_turns_intent (intent_key),
@@ -347,7 +451,7 @@ CREATE TABLE ai_turns (
 
 ```
 
-### 4.3.3 `tickets` テーブル変更案
+### 4.3.5 `tickets` テーブルへの拡張
 
 ```sql
 ALTER TABLE tickets
@@ -356,10 +460,15 @@ ALTER TABLE tickets
 
 ```
 
-### 4.4 🔧 パラメータ候補（AI_CORE）
+---
 
-※ 実体は `options_master` / `shop_options` / `sys_params` 等で管理する前提。
+### 4.4 🔧 パラメータ候補（AI_CORE 全体）
 
+> 実体は options_master / shop_options / sys_params 等で管理する前提。
+> 
+> 
+> `shop_options` による店舗別オーバーライドを許容する。
+> 
 - モデル関連
     - `ai_core.default_model`
     - `ai_core.model_per_channel.help`
@@ -372,23 +481,26 @@ ALTER TABLE tickets
     - `ai_core.temperature.shop.merchant`
     - `ai_core.max_tokens.reply`
     - `ai_core.max_history_turns`
-- フォールバック閾値
-    - `ai_core.intent_confidence_threshold.high`
-    - `ai_core.intent_confidence_threshold.low`
-    - `ai_core.ticket_auto_escalation_threshold`
+- プロファイルごとの閾値
+    - `ai_core.profile.normal.conf_high`
+    - `ai_core.profile.normal.conf_low`
+    - `ai_core.profile.cautious.conf_high`
+    - `ai_core.profile.cautious.conf_low`
+    - `ai_core.profile.escalate_prefer.conf_high`
+    - `ai_core.profile.escalate_prefer.conf_low`
 - ログ／保持期間
-    - `ai_core.turn_log_retention_days_full`（フルテキスト保持日数）
-    - `ai_core.turn_log_retention_days_masked`（マスク済みで保持する日数）
-    - `ai_core.session_log_retention_days`（`ai_sessions` の保持日数）
-- PII マスキング
-    - `ai_core.log_pii_masking_rules`（電話／メール／予約番号などの正規表現セット）
-    - `ai_core.log_pii_mask_after_days`（マスキングを実施するまでの日数）
+    - `ai_core.turn_log_retention_days_full`（フルテキスト保持日数：初期値 90 日）
+    - `ai_core.turn_log_retention_days_masked`（マスク済み保持日数：初期値 1095 日（3 年））
+    - `ai_core.session_log_retention_days`（`ai_sessions` の保持日数：初期値 5 年）
+- PII マスキング関連
+    - `ai_core.log_pii_masking_rules`（電話／メール／予約番号等の正規表現セット）
+    - `ai_core.log_pii_mask_after_days`（マスキング実施までの日数：初期値 90 日）
+- セルフ解決判定
+    - `ai_core.self_solved_decision_window_hours`（セルフ解決判定の有効時間：初期値 24 時間）
 - スタイル／トーン
-    - `ai_core.style.help.customer`
-    - `ai_core.style.shop.merchant`
-    - `ai_core.style.ai.hq`
-
-店舗ごとに差異があり得るもの（トーン／温度など）は `shop_options` でオーバーライド可能とする。
+    - `ai_core.style.help.customer`（顧客向けスタイルプロファイルID）
+    - `ai_core.style.shop.merchant`（加盟店向けスタイルプロファイルID）
+    - `ai_core.style.ai.hq`（本部向けスタイルプロファイルID）
 
 ---
 
@@ -398,58 +510,98 @@ ALTER TABLE tickets
 
 1. **リクエスト受領**
     - 各チャネル（help./line./shop./ai.）から AI_CORE_REQUEST を受け取る。
-    - `request_id` が無い場合は SYS_CORE 側で採番。
+    - `request_id` が未指定の場合、SYS_CORE 側で採番。
 2. **セッション解決**
-    - `context.session.ai_session_id` が指定されていれば、その `ai_sessions` レコードを更新（`last_activity_at` 更新）。
-    - 指定が無ければ、新規 `ai_sessions` レコードを作成し、`ai_session_id` を採番。
-3. **インテント／分類フェーズ**
+    - `context.session.ai_session_id` が指定されている場合はそのレコードを `ai_sessions` から取得し、`last_activity_at` を更新。
+    - 未指定の場合は新規 `ai_sessions` レコードを作成し、`started_at`／`last_activity_at` を現在時刻でセット。
+3. **インテント推定**
     - SYS_CORE の HTTP クライアント経由で LLM を呼び出し、
         
-        ユーザー発話＋必要なコンテキスト（店舗／ユーザー属性など）から:
+        ユーザー発話＋必要なコンテキスト（店舗情報／ユーザー属性／履歴の一部）を渡して：
         
-        - インテントキー
-        - カテゴリ／サブカテゴリ
-        - 緊急度
-        - 回答候補文
-        - 信頼度ヒント
+        - インテントキー (`intent.key`)
+        - カテゴリ／サブカテゴリ (`classification.category` / `subcategory`)
+        - 緊急度 (`classification.urgency`)
+        - 信頼度 (`intent.confidence`)
             
-            を取得する。
+            を取得。
             
-4. **回答タイプ決定・フォールバック判断**
-    - 信頼度、インテント種別、緊急度、設定値をもとに
-        - `answer.type`（faq/scenario/template/generated/handoff）
-        - `escalation.action`（none/create_ticket/transfer_to_human）
+    - `ai_intents_master` から `intent_key` に対応するレコードを参照し、`handling_profile` や label を補完。
+4. **回答候補抽出**
+    - `ai_qa_entries` を以下の条件で検索：
+        - `intent_id` = 対応する `ai_intents_master.id`
+        - `target_type` = `actor_type`（customer／merchant／hq）
+        - `channel_scope` に当該チャネル（help／line／shop／ai）が含まれる
+        - `is_active = 1`
+    - priority の高いものから順に使用候補とする。
+5. **回答タイプ決定とシナリオ判定**
+    - `handling_profile` と信頼度 (`confidence`) を見て、次を決定：
+        - `answer.type`（faq／scenario_step／clarify／handoff）
+        - シナリオ用の `followup.question` が必要かどうか
+    - FAQ型：
+        - `answer_type = 'faq'` の Q&A があり、信頼度が高い：
+            - → テンプレ＋LLM整形で即回答。
+    - シナリオ型（ステップ型）：
+        - Q&A で `answer_type = 'scenario_entry'` かつ `followup_question_1` が存在：
+            - セッション状態を見て現在ステップを決定し、`followup.question` を返す。
+    - Clarify型：
+        - 信頼度が閾値以下の場合（特に handling_profile = cautious 以上）：
+            - → 質問の候補（Q&A タイトルなど）を提示し、「どのパターンか」確認するための質問に落とす。
+6. **エスカレーション判断**
+    - `handling_profile`／`confidence`／`classification.urgency` に基づき、
+        - `escalation.action`（none／create_ticket／transfer_to_human）を決定。
+    - `create_ticket` の場合：
+        - `tickets` に登録するための `ticket_draft`（title／body_preview／priority／tags）を構成する。
+7. **応答テキスト生成（LLM整形）**
+    - LLM に対し：
+        - ユーザー発話
+        - インテント情報
+        - Q&Aテンプレ（answer_template）
+        - 代表質問例（question_examples）
+        - シナリオステップ情報（必要な場合）
             
-            を決定。
+            を渡し、
             
-    - STORES／RemoteLOCK フローが必要な場合は、
-        
-        「どのフローに乗せるべきか」の判断のみ行い、API_COMM 側へ渡す。
-        
-5. **応答文整形**
-    - 選ばれた回答種別＋トーン設定に基づき、`reply_text` を組み立てる。
-    - 顧客／加盟店／本部で言い回しが変わる部分はプロンプトテンプレートで制御する。
-6. **ログ記録**
-    - `ai_turns` にユーザー発話／AI応答／メタ情報を1レコードとして保存。
+        - 「人間が丁寧に説明している」トーン
+        - チャネル／対象（顧客／加盟店／本部）に応じた言い回し
+            
+            で回答文を整形させる。
+            
+8. **ログ記録**
+    - `ai_turns` に 1 レコード挿入：
+        - セッションID
+        - user_message／reply_text
+        - intent_key／intent_confidence
+        - answer_type／answer_source_qa_id
+        - escalation_action／reason
+        - model_name／トークン数／レイテンシ
     - 必要に応じて `api_call_logs`／`sys_events` にも記録（SYS_CORE責務）。
-7. **レスポンス返却**
-    - AI_CORE_RESPONSE を呼び出し元へ返す。
-    - `escalation.action != 'none'` の場合、フロント or バックエンドから `SysEscalation` を呼び出し、
+9. **レスポンス返却**
+    - AI_CORE_RESPONSE をチャネル側に返却。
+    - `escalation.action != 'none'` の場合、
         
-        `tickets` 作成や ChatWork 通知を行う。
+        フロント or バックエンドが `SysEscalation` を呼び出し、`tickets` 作成や ChatWork 通知を行う。
         
 
-### 5.2 エスカレーションフロー概要
+### 5.2 セルフ解決率と 24 時間ルール
 
-- 条件（例）
-    - 信頼度が `ai_core.intent_confidence_threshold.low` 未満
-    - クレーム／返金／鍵トラブルなど、規定上人間判断が必要なカテゴリ
-    - ユーザーが明示的に「人と話したい」「電話してほしい」と要求
-- 流れ
-    1. AI_CORE が `escalation.action` と `ticket_draft` を作成
-    2. フロント or バックエンドが `SysEscalation` にチケット案を渡す
-    3. `tickets` に登録し、ChatWork／メールなどへ通知
-    4. `tickets.ai_session_id` にセッションIDを保存し、後から会話をトレースできるようにする
+- チャネル側で「解決しましたか？」ボタン等を提供し、
+    
+    押された場合に `ai_sessions` を更新：
+    
+    - `resolved_status = 'resolved_by_ai'`
+    - `is_self_solved = 1`
+- 24 時間以内に明示の解決／未解決が得られなかったセッション：
+    - `resolved_status` は別ルール（例：`resolved_by_ai` or `abandoned`）で閉じてもよいが、
+        
+        `is_self_solved` は 0 のまま（KPI には含めない）。
+        
+- セルフ解決率の分母は
+    
+    「24 時間以内に `is_self_solved` 判定がついたセッション」のみとし、
+    
+    判定不能セッションは「Unknown」として別カウントする。
+    
 
 ---
 
@@ -457,22 +609,38 @@ ALTER TABLE tickets
 
 ### 6.1 LLM 連携
 
-- AI_CORE → SYS_CORE の HTTP クライアント → LLM（OpenAI など）
-- APIキー・モデル名・ベースURLなどは `SysConfig` が解決する。
+- AI_CORE → SYS_CORE の HTTP クライアント → LLM（OpenAI 等）
+- モデル名・ベースURL・APIキーはすべて `SysConfig` から取得する。
+- プロファイル／チャネルごとのモデル分けは
+    
+    `ai_core.model_per_channel.*` 等のパラメータで制御。
+    
 
-### 6.2 STORES / RemoteLOCK 等
+### 6.2 STORES／RemoteLOCK 等（API_COMM フェーズとの連携前提）
 
-- AI_CORE は「この問い合わせは STORES の予約確認が必要」「解錠番号案内フロー」と判断するのみ。
-- 実際の API 呼び出しは API_COMM フェーズで定義されたエンドポイントを利用。
-- AI_CORE は API_COMM から返った結果を元に「どう説明するか」「どこまで言うか」をコントロールする。
+- AI_CORE は「どのフローに乗せるか」までを判断する：
+    - 例：「これは解錠番号案内フロー」「これは予約変更フロー」など。
+- 実際の STORES／RemoteLOCK API 呼び出しは、API_COMM フェーズで定義されるエンドポイントを通じて行う。
+- AI_CORE は API_COMM から返却された結果をもとに、
+    - どこまでエンドユーザーに見せるか（例：解錠番号の一部だけ）
+    - どんなトーンで案内するか
+        
+        を決定し、返信文に反映する。
+        
 
 ### 6.3 エスカレーション通知
 
-- `SysEscalation` を通じて、以下への通知が可能：
-    - ChatWork（店舗用／本部用ルーム）
-    - メール
-    - SMS（必要な場合）
-- AI_CORE は「チケット下書き」「優先度」「タグ」など、通知内容の雛形を提供する。
+- `escalation.action = 'create_ticket'` の場合：
+    - チャネル／バックエンド側から `SysEscalation` を呼び出し、
+        - `tickets` テーブルへ登録
+        - ChatWork／メール／SMS への通知
+            
+            を行う。
+            
+- `tickets.ai_session_id` に AI セッションIDを紐付けることで、
+    
+    後から「どの会話からこのチケットが生まれたか」を辿れる。
+    
 
 ---
 
@@ -482,57 +650,73 @@ ALTER TABLE tickets
 
 - AI_CORE は `shared/ai_core.php` 等の内部ライブラリとして実装し、
     
-    直接外部から叩けるエンドポイントは持たない。
+    外部から直接叩けるエンドポイントは持たない。
     
-- 認証・認可はチャネルごとのフロント／SYS_COREで完了済みとし、
+- 認証・認可はチャネルごとのフロント／SYS_CORE側で完了済みとし、
     
-    AI_CORE には「認証済みユーザー情報」が渡される前提。
+    AI_CORE には「認証済みユーザー情報」が渡る前提。
     
 
-### 7.2 個人情報（PII）取り扱い
+### 7.2 個人情報（PII）の扱い
 
-- `ai_turns.user_message`／`ai_turns.reply_text` には、
-    
-    一時的に個人情報（電話番号／メール／予約番号など）が含まれる可能性がある。
-    
+- `ai_turns.user_message`／`ai_turns.reply_text` には、電話番号／メール／予約番号などの PII が含まれる可能性がある。
 - 標準方針：
-    - フルテキスト状態は短期間のみ保持（パラメータ `ai_core.turn_log_retention_days_full`）
-    - その後、PII マスキングルール（正規表現）に従ってマスクを実施
-    - マスク済みのテキストは「一般的な問い合わせ傾向の分析」などに利用可能とする。
+    - フルテキスト状態での保持は 90 日まで。
+    - 90 日経過後、`ai_core.log_pii_masking_rules` に基づいてマスキングを実施。
+    - マスク済みテキストは最大 3 年まで保持し、問い合わせ傾向分析や AI 改善に利用可能とする。
 - マスキング対象例：
-    - 電話番号形式の文字列
+    - 電話番号形式（例：`0X0-XXXX-XXXX` など）
     - メールアドレス形式
     - 特定フォーマットの予約番号／会員番号
 
 ### 7.3 権限と可視範囲
 
-- 本部（ai.）：
-    - 全店舗の `ai_sessions` / `ai_turns` を閲覧可能（内部利用）。
-- 加盟店（shop.）：
+- 本部（ai.）
+    - 全店舗の `ai_sessions` / `ai_turns` を閲覧可能（内部分析・改善用）。
+- 加盟店（shop.）
     - 自店舗に紐づく `ai_sessions` / `ai_turns` のみ閲覧可能。
-    - マスク後の内容を前提とし、本部向け内部メモなどは非表示。
-- エンドユーザー：
-    - 過去の会話履歴をどこまで見せるかは UI/UX フェーズで別途設計。
+    - PII マスク後の内容を前提とし、本部向け内部メモやコメントは非表示。
+- エンドユーザー（help./LINE）
+    - 過去の会話履歴をどこまで見せるかは、UI フェーズ（顧客チュートリアル）で設計。
+    - 本仕様では「必要に応じて履歴を参照できる」程度の前提にとどめる。
 
 ---
 
 ## 8. 未決課題 / 次フェーズへの引き継ぎ
 
-### 8.1 Phase2 内で確定が必要な未決
+### 8.1 Phase2 内で後続チャットで詰めるべき未決事項
 
-- インテントマスタの実装方式
-    - テーブル構造（例：`ai_intents_master`）／管理画面方針。
-- FAQ／シナリオのデータ構造
-    - テーブル分割（FAQ / シナリオ / テンプレ）と I/O 契約。
-- 閾値・保持期間の具体値
-    - インテント信頼度の high/low 値
-    - フルテキスト保持日数／マスキング日数／セッション保持日数の初期値
+- **AI2-01：`channel_scope`・`question_examples` の内部フォーマット**
+    - `channel_scope` を文字列カンマ区切りで固定するか、ビットフラグ型にするか。
+    - `question_examples` を TEXT＋改行区切り vs JSON配列のどちらにするか。
+- **AI2-02：CSVフォーマットの細部仕様**
+    - インテントマスタ用 CSV の確定カラム列
+    - Q&A 用 CSV の確定カラム列
+    - `question_examples` の区切り文字（改行／`||`／JSON など）
+    - 「大雑把な問い合わせデータ → 投入用 CSV への整形」を AI で支援する運用フローの定義。
+- **AI2-03：handling_profile ごとの初期閾値**
+    - `normal` / `cautious` / `escalate_prefer` 各プロファイルについて、
+        - `conf_high` / `conf_low` の推奨値を最終確定する。
+- **AI2-04：ログ保持期間の最終値**
+    - 規約・顧問（法務・税務）の意見を踏まえ、
+        - フルテキスト保持日数
+        - マスク済み保持日数
+        - セッションメタ保持年数
+            
+            を最終確定する。
+            
 
-### 8.2 チュートリアル層フェーズへの引き継ぎ
+### 8.2 次フェーズ（顧客／加盟店チュートリアル層）への引き継ぎ事項
 
-- `ai_sessions.is_self_solved` の更新タイミングと UI
-    - 顧客／加盟店に「解決しました／まだ解決していない」をどう聞くか。
+- `ai_sessions.is_self_solved` の更新トリガー
+    - 顧客／加盟店チュートリアルの UI で「解決しました／まだです」をどこで出すか。
+    - ボタンが押されなかった場合の `resolved_status` 更新ルール（24時間後の扱い）を具体化する。
+- シナリオ（ステップ型）の利用対象インテント
+    - v1.4 でシナリオを適用するインテント（解錠番号／解約／一部トラブル）をピックアップし、
+        
+        `followup_question_1`／`followup_question_2` を設計する。
+        
+- 加盟店向けログ画面の仕様
+    - `ai_sessions`／`ai_turns` を shop. 側でどのように見せるか（一覧／詳細／フィルタ）。
 - セルフ解決率／エスカレーション率のダッシュボード仕様
-    - 本部画面（ai.）でどの粒度（店舗別／チャネル別／期間別）で見せるか。
-- 「店舗ごとのAIのクセ調整」（温度／トーン）の UI と運用ルール
-    - shop_options の編集画面との連携。
+    - 本部（ai.）画面で、KPI をどの粒度（店舗別／チャネル別／期間別）で表示するか。
