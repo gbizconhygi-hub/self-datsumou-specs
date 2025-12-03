@@ -93,7 +93,7 @@
 - 全ジョブは PHP CLI スクリプトとして `cron_*.php` 名で配置する。
     - 例：`cron_sales_import.php`, `cron_kpi_aggregate.php` など
 - 実行ユーザは Web アプリと同じ OS ユーザ（例：`www-data`）を想定。
-- CLI 引数は `-key=value` 形式で受け付ける。
+- CLI 引数は `key=value` 形式で受け付ける。
 
 例:
 
@@ -192,7 +192,7 @@ CREATE TABLE sys_job_runs (
 | J5 | `cron_sms_followup.php` | 未返信チケットへの追撃通知（ChatWork／SMS） | 5分間隔 |
 | J6 | `cron_meeting_reminders.php` | HQミーティング前日／1時間前リマインド | 10分間隔 |
 | J7 | `cron_backup_db.php` | DB＋請求PDFバックアップ | 毎日 |
-| J8 | `cron_cleanup_logs.php` | ログ・KPI・エラーレコードの保持期間管理（削除） | 毎日 or 週次 |
+| J8 | `cron_cleanup_logs.php` | ログ・KPI・エラーデータ削除 | 毎日 or 週次 |
 
 ※OP_MAIL（電話代行メール解析）は Push トリガであり cron の対象外。
 
@@ -226,8 +226,8 @@ php cron_sales_import.php --auto=1
 ```
 
 - 主な引数
-    - `-job-id`（任意）: 処理対象の `sales_import_jobs.id`
-    - `-auto`（bool）: 1 の場合、未処理ジョブを古い順に処理
+    - `job-id`（任意）: 処理対象の `sales_import_jobs.id`
+    - `auto`（bool）: 1 の場合、未処理ジョブを古い順に処理
 - 戻り値
     - 正常終了：`exit 0`
     - 入力なし（対象ジョブなし）：`exit 0`（ログに「対象なし」を残す）
@@ -237,8 +237,8 @@ php cron_sales_import.php --auto=1
 
 1. `sys_job_runs` へ `status='running'` で開始ログを記録。
 2. 対象 `sales_import_jobs` の取得
-    - `-job-id` 指定時：その1件のみ
-    - `-auto` 時：`status in ('uploaded','validating')` を `created_at` 昇順で1件取得
+    - `job-id` 指定時：その1件のみ
+    - `auto` 時：`status in ('uploaded','validating')` を `created_at` 昇順で1件取得
 3. ジョブ状態を `validating` → `importing` → `completed`／`completed_with_warning`／`failed` へ遷移
 4. CSV行を走査し
     - 正常行：`sales_records` に INSERT／UPDATE
@@ -262,7 +262,7 @@ php cron_sales_import.php --auto=1
     自動モードでの取り込みを定期的に実行するか。
     
 - `cron.sales_import.max_jobs_per_run`（int）
-    - `-auto` 実行時に1回で処理するジョブ数上限（デフォルト1）。
+    - `auto` 実行時に1回で処理するジョブ数上限（デフォルト1）。
 - `cron.sales_import.notify_on_warning`（bool）
     
     `completed_with_warning` の場合に ChatWork 通知するか。
@@ -299,10 +299,10 @@ php cron_kpi_aggregate.php --granularity=monthly --month=2025-11 --extended=1
 ```
 
 - 引数
-    - `-granularity`（必須）: `daily` / `monthly`
-    - `-date`（`daily` 時必須）: `YYYY-MM-DD`
-    - `-month`（`monthly` 時必須）: `YYYY-MM`
-    - `-extended`（任意）: 1 の場合、`shop_kpi_metrics` も再計算
+    - `granularity`（必須）: `daily` / `monthly`
+    - `date`（`daily` 時必須）: `YYYY-MM-DD`
+    - `month`（`monthly` 時必須）: `YYYY-MM`
+    - `extended`（任意）: 1 の場合、`shop_kpi_metrics` も再計算
 
 ### 5-2-3. 処理フロー概要
 
@@ -355,7 +355,7 @@ php cron_invoices.php --billing-month=2025-11
 ```
 
 - 引数
-    - `-billing-month`（任意）: 請求対象月 (`YYYY-MM`)。省略時は「前月」を対象とする。
+    - `billing-month`（任意）: 請求対象月 (`YYYY-MM`)。省略時は「前月」を対象とする。
 - 振る舞い
     - 指定月の `invoices`／`invoice_items` を再生成する場合は
         
@@ -417,7 +417,7 @@ php cron_royalty_relief_check.php --month=2025-11
 ```
 
 - 引数
-    - `-month`（任意）: 評価対象月 (`YYYY-MM`)。
+    - `month`（任意）: 評価対象月 (`YYYY-MM`)。
         
         省略時は「前月」を対象とする。
         
@@ -431,37 +431,39 @@ php cron_royalty_relief_check.php --month=2025-11
 2. `ai_inbox.royalty_relief_check_enable` が false の場合、何もせず終了。
 3. `is_active=1` の `shop_royalty_relief_rules` を取得。
 4. ルールごとに以下を評価。
-- `rule_type='monthly_sales_over'` の場合
-    - 対象店舗の評価対象月の売上合計（税抜）を `sales_records` から集計。
-        - どの `source_type` を対象にするかは SALES_LINK 側の `source_type` 定義に従う。
-    - `sales_sum >= threshold_value` で「条件達成」と判定。
-- `rule_type='months_since_open_over'` の場合
-    - `shops.open_date` から評価対象月末までの経過月数を計算。
-    - 経過月数 >= `threshold_value` で「条件達成」と判定。
-1. 条件達成時のふるまい
-- `alert_only=1`（v1.4 標準）の場合
-    - `ai_inbox.royalty_relief_alert_channel` により分岐。
-        - `ticket`：
-            - `tickets` に
-                - `source='system'`
-                - `category='royalty_relief'`
-                - `shop_id`／`owner_id`
-                - `subject="{店舗名}：ロイヤリティ特例の戻し条件を満たしました"`
-                - `status='open'`
-                - `priority='warning'`
-                    
-                    を持つチケットを自動起票する。
-                    
-            - 同一 `shop_id`／`rule_id`／`month` で既存 open チケットがある場合は重複作成を避ける。
-        - `sys_event`：
-            - `sys_events` に
-                - `event_type='royalty_relief_condition_met'`
-                - `severity='info' or 'warning'`
-                - `payload_json` に `shop_id`／`rule_id`／`rule_type`／`threshold_value`／`month` 等
-                    
-                    を記録する。
-                    
-1. 処理件数（条件達成ルール数／作成チケット数）を `sys_job_runs` に記録して終了。
+    - `rule_type='monthly_sales_over'` の場合
+        - 対象店舗の評価対象月の売上合計（税抜）を `sales_records` から集計。
+            
+            どの `source_type` を対象にするかは SALES_LINK 側の `source_type` 定義に従う。
+            
+        - `sales_sum >= threshold_value` で「条件達成」と判定。
+    - `rule_type='months_since_open_over'` の場合
+        - `shops.open_date` から評価対象月末までの経過月数を計算。
+        - 経過月数 >= `threshold_value` で「条件達成」と判定。
+5. 条件達成時のふるまい
+    - `alert_only=1`（v1.4 標準）の場合
+        - `ai_inbox.royalty_relief_alert_channel` により分岐。
+            - `ticket`：
+                - `tickets` に
+                    - `source='system'`
+                    - `category='royalty_relief'`
+                    - `shop_id`／`owner_id`
+                    - `subject="{店舗名}：ロイヤリティ特例の戻し条件を満たしました"`
+                    - `status='open'`
+                    - `priority='warning'`
+                        
+                        を持つチケットを自動起票する。
+                        
+                - 同一 `shop_id`／`rule_id`／`month` で既存 open チケットがある場合は重複作成を避ける。
+            - `sys_event`：
+                - `sys_events` に
+                    - `event_type='royalty_relief_condition_met'`
+                    - `severity='info' or 'warning'`
+                    - `payload_json` に `shop_id`／`rule_id`／`rule_type`／`threshold_value`／`month` 等
+                        
+                        を記録する。
+                        
+6. 処理件数（条件達成ルール数／作成チケット数）を `sys_job_runs` に記録して終了。
 
 ### 🔧 パラメータ候補
 
@@ -535,6 +537,7 @@ php cron_royalty_relief_check.php --month=2025-11
         
         を行う。
         
+- v1.4 時点では MTG ツールは **Google Meet を標準** とし、`hq_meetings.meeting_join_url` に格納された **Google Meet 参加URL** を、リマインド通知本文に必ず含める（NULL の場合のみ URL なしで送信）。
 
 ### 5-6-2. 実行頻度
 
@@ -543,22 +546,28 @@ php cron_royalty_relief_check.php --month=2025-11
     - 「前日リマインド済みフラグ」
     - 「1時間前リマインド済みフラグ」
         
-        を見て、必要なタイミングだけ送信。
+        を見て、必要なタイミングだけ送信する。
         
 
 ### 5-6-3. ロジック概要
 
-1. `sys_job_runs` に開始ログ。
-2. 対象期間
+1. `sys_job_runs` に開始ログを記録。
+2. 対象期間を判定し、リマインド対象の `hq_meetings` を抽出する。
     - 前日リマインド：
-        - 現在が 9:00±数分のタイミングのとき、翌日開催のミーティングに対して送信。
+        - 現在が `cron.meeting_reminders.prev_day_hour`（例：9:00）±数分のタイミングのとき、翌日開催のミーティングで `reminded_prev_day=0` のものを対象とする。
     - 1時間前リマインド：
-        - `start_at` の60分前〜50分前に該当するミーティングに対して送信。
+        - `meeting_start_at` の60分前〜50分前に該当し、`reminded_one_hour=0` のものを対象とする。
 3. 通知チャネル：
     - ChatWork DM／グループ
     - メール（必要なら）
-4. `hq_meetings` 側のフラグ（例：`reminded_prev_day`, `reminded_one_hour`）を ON にする。
-5. 件数を `sys_job_runs` に記録して終了。
+        
+        通知本文には少なくとも次を含める。
+        
+    - 日付・時刻
+    - meeting_type（例：初回オリエン／運営相談 等）
+    - `meeting_join_url`（設定されている場合。Google Meet 参加URLとして、そのままクリック可能なリンクにする）
+4. 通知送信に成功したミーティングについて、`hq_meetings` 側のフラグ（例：`reminded_prev_day`, `reminded_one_hour`）を ON にする。
+5. 対象件数・送信件数・失敗件数を集計し、`sys_job_runs` に記録して終了する。
 
 ### 🔧 パラメータ候補
 
