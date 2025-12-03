@@ -570,3 +570,96 @@ CREATE TABLE shop_kpi_metrics (
 - 「要注意店舗」の定義ロジック：
     - スコアだけで判定するか
     - 「SLA違反が連続◯ヶ月」「問い合わせ増加トレンド」などの条件も組み込むか。
+
+---
+
+## X. 【任意拡張】ロイヤリティ特例ルール関連KPI（Phase5 反映）
+
+> ※本節は、Phase5 で追加されたロイヤリティ特例ルールに関する  
+>  「KPIダッシュボードへの表示ニーズ」を想定した任意拡張であり、  
+>  v1.4の必須実装ではない。  
+
+### X.1 目的
+
+- ロイヤリティ特例ルール `shop_royalty_relief_rules` の「条件達成状況」を  
+  KPIダッシュボード（ai.）からざっくり把握できるようにする。
+- **特例ルールの評価ロジック自体は Phase7 のバッチ側に任せ**、  
+  KPI側では「結果（達成したかどうか）」だけを拾って表示する。
+
+### X.2 拡張メトリクス案（`shop_kpi_metrics` 向け）
+
+以下のような `metric_key` を、`shop_kpi_metrics` の任意拡張として定義しておく。
+
+#### X.2.1 `royalty_relief_condition_met`
+
+- 用途:
+  - 対象期間において、ロイヤリティ特例ルールの条件を **1回でも満たしたかどうか** をフラグで持つ。
+- 格納例:
+  - `metric_key = 'royalty_relief_condition_met'`
+  - `metric_type = 'int'`
+  - `metric_value_numeric = 1`（条件達成あり） or `0`（条件達成なし）
+  - `metric_unit = ''`
+- サマリ画面での使い方:
+  - 「特例条件達成済みの店舗のみ表示」フィルタ  
+  - 「条件達成店舗数」のカウント
+
+#### X.2.2 `royalty_relief_condition_count`
+
+- 用途:
+  - 対象期間内に条件達成が何回起きたか（ルール複数件があれば合算）。
+- 格納例:
+  - `metric_key = 'royalty_relief_condition_count'`
+  - `metric_type = 'int'`
+  - `metric_value_numeric = 達成回数`
+
+#### X.2.3 `royalty_relief_active_rules_count`
+
+- 用途:
+  - 対象店舗に現在有効な特例ルールがいくつ設定されているか。
+- 格納例:
+  - `metric_key = 'royalty_relief_active_rules_count'`
+  - `metric_type = 'int'`
+  - `metric_value_numeric = is_active=1 の件数`
+
+> これらはすべて **バッチ側で集計し `shop_kpi_metrics` にINSERT** する想定であり、  
+> KPI_ANALYTICS 側の責務は「どういう metric_key があれば便利か」を定義するところまでとする。
+
+---
+
+### X.3 KPI_ANALYTICS_DEFAULT_PARAMS への追加案
+
+任意だが、以下のパラメータを追加しておくと UI 制御がしやすい。
+
+#### X.3.1 `kpi_metrics_enabled_keys` への初期値候補
+
+- `['royalty_relief_condition_met','royalty_relief_condition_count']`  
+  → ロイヤリティ特例関連の指標をダッシュボード上で有効にする場合。
+
+#### X.3.2 `kpi_royalty_relief_highlight_enabled`
+
+- 型: `bool`
+- デフォルト値例: `false`
+- 説明:
+  - `true` の場合、「ロイヤリティ特例条件を満たした店舗」を  
+    コンディションタブ上でハイライト表示する。
+
+---
+
+### X.4 決定事項 / 未決事項（任意拡張分）
+
+#### 決定事項（採用する場合）
+
+- ロイヤリティ特例ルールの条件達成情報を KPI ダッシュボードに反映する場合、  
+  その情報は `shop_kpi_metrics` に `metric_key` ベースで保存し、  
+  `shop_kpis` の固定カラムは増やさない。
+- metric_key は最低限  
+  - `royalty_relief_condition_met`  
+  - `royalty_relief_condition_count`  
+  を用意する。
+
+#### 未決事項
+
+- 実際に v1.4 でどこまで表示するか：
+  - 「要注意店舗の絞り込みに使うだけ」に留めるのか、  
+  - 専用のロイヤリティ分析タブを作るのかは運用要件次第。
+- 直営店舗にも同じメトリクスを使うか（＝FC限定にするかどうか）。
