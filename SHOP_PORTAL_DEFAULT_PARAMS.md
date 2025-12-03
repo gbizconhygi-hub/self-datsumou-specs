@@ -1,10 +1,4 @@
-
----
-
-## 3. SHOP_PORTAL_DEFAULT_PARAMS.md（キー＋型＋初期値）
-
-```markdown
-# SHOP_PORTAL_DEFAULT_PARAMS (v1.0 Draft)
+# SHOP_PORTAL_DEFAULT_PARAMS (v1.1 Draft)
 
 ```yaml
 # NOTE:
@@ -153,9 +147,36 @@ params:
     scope: "global"
     description: "オーナー情報修正の申請（hq_requests）を受け付けるか"
 
+  # ===== スタッフロール・マスク =====
+  - key: "shop_portal.staff_role_enable"
+    type: "bool"
+    default: true
+    scope: "global"
+    description: "スタッフロール機能（staff_basic / staff_multi_shop）を有効にするか"
+
+  - key: "shop_portal.staff_default_role"
+    type: "string"
+    default: "staff_basic"
+    scope: "global"
+    description: "新規スタッフ作成時のデフォルトロール"
+
+  - key: "shop_portal.staff_default_mask_fields"
+    type: "json"
+    default: '["billing.total_amount","billing.item_amounts","sales.gross_amount","kpi.detail"]'
+    scope: "global"
+    description: "全スタッフに対してデフォルトでマスクするフィールドキーの一覧"
+
+  - key: "shop_portal.staff_multi_shop_allow_cross_shop_view"
+    type: "bool"
+    default: true
+    scope: "global"
+    description: "staff_multi_shop ロールに owner 配下の全店舗横断ビューを許可するか"
+
   # ===== 店舗別上書き用（例） =====
   - key: "shop_portal.dashboard_default_range_days"
     type: "int"
     default: 7
     scope: "shop"
     description: "特定店舗のみダッシュボード期間を変更したい場合に shop スコープで上書き可能。"
+
+```
