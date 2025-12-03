@@ -551,3 +551,149 @@ CREATE TABLE sales_import_errors (
 - STORES API による自動取込に切り替える際、
     - `sales_import_jobs` を継続利用するか、
     - 別のジョブ管理を用意するか（互換性をどう保つか）。
+
+## 10. 【差分仕様】ロイヤリティ特例ルール連携（Phase5 反映）
+
+本節は、Phase5 で追加された **ロイヤリティ特例ルール／アラート仕様** との整合を取るために、  
+SALES_LINK 側で定義しておくべき「ロイヤリティ判定用売上」の扱いを明示する差分である。  
+
+対象となる既存仕様：
+
+- ロイヤリティ関連テーブル
+  - `shops.royalty_type`／`royalty_flat`／`royalty_percent`
+  - `shop_royalty_history` … 期間別ロイヤリティ履歴
+- 特例ルールテーブル（Phase5 追加）
+  - `shop_royalty_relief_rules`
+- 評価ロジック（Phase5 差分仕様）
+  - rule_type=`monthly_sales_over` の場合：  
+    > 「対象店舗の当月売上合計を `sales_records` から集計（FC売上のみ／対象sourceはPhase6で定義）」
+
+本節では、この **「ロイヤリティ判定用の売上」** を Phase6 SALES_LINK として定義する。
+
+---
+
+### 10.1 ロイヤリティ判定用売上の定義（概念）
+
+**名称（論理名）**  
+- `monthly_royalty_base_sales`（店舗別・月別のロイヤリティ判定ベース売上）
+
+**定義（概念レベル）**
+
+- ベースとなるテーブル：`sales_records`
+- 集計単位：`shop_id` × 対象月（例：2025-03）
+- 対象店舗：
+  - 原則として「FC店舗のみ」を対象とする。  
+  - FC／直営の判定は、`owners`／`shops` の種別カラム（例：`owners.owner_type` や `shops.contract_type` 等）に従う。  
+  - 具体的な判定カラム名は Phase0 DB_CORE 仕様に準拠し、本書では **「FC店舗のみ」** という概念レベルで扱う。
+
+- 対象売上（source_type）：
+  - ロイヤリティ計算に含める `sales_records.source_type` の一覧を、  
+    **パラメータ `royalty_source_types` で定義する**（デフォルトは全種別を含める）。
+  - 例：`['monthly_ticket','spot_card','spot_local']`
+
+- 集計対象金額：
+  - 基本は `revenue` を利用（= 手数料控除後の「入金ベース」）。  
+  - ただし運用上、「ロイヤリティは税込売上額（amount）ベースとしたい」場合もあり得るため、  
+    どちらを使うかはパラメータ `royalty_base_column` で切り替える。
+
+**式イメージ**
+
+```text
+monthly_royalty_base_sales(shop_id, month)
+  = SUM(
+      CASE royalty_base_column
+        WHEN 'revenue' THEN sr.revenue
+        WHEN 'amount'  THEN sr.amount
+      END
+    )
+    WHERE sr.shop_id = :shop_id
+      AND DATE_FORMAT(sr.transaction_datetime, '%Y-%m') = :month
+      AND sr.source_type IN (:royalty_source_types)
+      AND 対象店舗がFCであること
+
+```
+
+---
+
+### 10.2 SALES_LINK_DEFAULT_PARAMS への追加
+
+Phase6 で別途定義した `SALES_LINK_DEFAULT_PARAMS` に、
+
+ロイヤリティ判定用のパラメータを以下のように追加する。
+
+### 10.2.1 `royalty_source_types`
+
+- 型: `string[]`
+- デフォルト値例: `['monthly_ticket','spot_card','spot_local']`
+- スコープ: システム全体
+- 説明:
+    - ロイヤリティ計算・特例ルール判定の対象とする `sales_records.source_type` の一覧。
+    - STORES CSV のうち「ロイヤリティ対象外」としたい種別があれば、ここから除外する。
+
+### 10.2.2 `royalty_base_column`
+
+- 型: `string`（`'revenue'` or `'amount'`）
+- デフォルト値: `'revenue'`
+- スコープ: システム全体
+- 説明:
+    - ロイヤリティ判定の基準金額として、`sales_records` のどの列を使うかを指定。
+    - 通常は `revenue`（手取りベース）とするが、「税込売上額ベースで見たい」場合は `'amount'` に切り替える。
+
+---
+
+### 10.3 Phase7 以降のロイヤリティ特例評価バッチとの関係
+
+Phase5 の差分仕様では、特例ルール評価バッチの候補として以下が挙げられている：
+
+- `cron_sales_import.php` に「売上取込直後に評価ロジックを組み込む」
+- もしくは `cron_royalty_relief_check.php` のような専用cronを月1回実行する
+
+Phase6 SALES_LINK としては、以下の前提を提供する。
+
+1. **評価に使うべき売上は `monthly_royalty_base_sales` である**
+    - 対象は FC 店舗のみ
+    - 対象 source_type は `royalty_source_types`
+    - 金額列は `royalty_base_column` による
+2. **評価ロジックの I/O 契約（概念）**
+- 入力：
+    - `shop_id`
+    - 対象月（例：`2025-03`）
+    - `monthly_royalty_base_sales`（本節で定義した集計結果）
+    - `shop_royalty_relief_rules`（is_active=1 のレコード）
+- 出力：
+    - 条件を満たした場合、Phase5 仕様に従い
+        - `sys_events` への `royalty_relief_condition_met` イベント
+        - または `tickets` への自動起票（カテゴリー `royalty_relief`）
+1. **実際のバッチスクリプトの実装・スケジュール** は Phase7（CRON_SYS）で詳細設計する。
+    
+    Phase6 では、「どの売上をどう集計するか」のみを責務とする。
+    
+---
+
+### 10.4 決定事項 / 未決事項（ロイヤリティ連携分）
+
+### 決定事項
+
+- ロイヤリティ特例ルール `monthly_sales_over` の判定に用いる売上は、
+    
+    Phase6 SALES_LINK で定義した `monthly_royalty_base_sales` を用いる。
+    
+- `monthly_royalty_base_sales` は、`sales_records` から
+    - FC店舗に限定
+    - `royalty_source_types` に含まれる `source_type` のみ
+    - 金額列は `royalty_base_column`
+        
+        という条件で集計する。
+        
+- 上記のパラメータは `SALES_LINK_DEFAULT_PARAMS` として外出しし、コード直書きを禁止する。
+
+### 未決事項・論点
+
+- FC / 直営の判定にどのカラムを使うか（`owners` 側か `shops` 側か）は Phase0 DB_CORE の実定義を確認して決定する。
+- ロイヤリティ判定に trial 売上（お試し体験）を含めるかどうかは、
+    
+    `royalty_source_types` の値で調整する前提とし、初期値をどうするかは運用側で判断が必要。
+    
+- `monthly_royalty_base_sales` を `shop_kpis` 側にも保持するかどうか（KPIで見たいかどうか）は、
+    
+    KPI_ANALYTICS の要件次第で追加検討する。
