@@ -133,6 +133,22 @@ ChatWork・メール・LINE・電話・予約など分散していた窓口を�
     - AIコア設定・FAQ管理・トーン調整
     - 加盟店ごとのKPIダッシュボード
 
+### 3.4 ユーザー種別・ロール
+
+本システムで扱う主なユーザー種別は次のとおりとする。
+
+| ロール | 想定主体 | 認証方法 | 主な利用画面 |
+| --- | --- | --- | --- |
+| hq_admin / hq_operator | 本部管理者・オペレーター | portal_users（role='admin' 等） | ai.（AI-INBOX／設定／KPI 等） |
+| owner | オーナー本人 | portal_users（role='owner'） | shop.（オーナーダッシュボード他） |
+| staff_basic | 店舗担当スタッフ | portal_users（role='staff'） | shop.（担当店舗中心の画面） |
+| staff_multi_shop | 複数店舗を横断して見る担当スタッフ | 同上 | shop.（複数店舗横断ビュー含む） |
+
+- owner／staff_* は、いずれも `owners` に紐づく「オーナー配下ユーザー」として扱う。
+- HQ ロール（hq_admin／hq_operator）は `owners` とは独立した本部ユーザーとする。
+- ログイン情報自体は `portal_users` テーブルに集約し、
+  詳細なテーブル定義・紐付けは `PHASE_00_DB_CORE.md`／`PHASE_01_SYS_CORE.md` に従う。
+
 ---
 
 ## 4. AIコア仕様（AI-INBOXの中枢）
@@ -241,7 +257,6 @@ STORES予約情報とRemoteLOCK解錠PINを突き合わせ、
     - デフォルト実装は「常に情報なし」を返すスタブ
 
 > ※ 実際のAPI連携（PIN取得／本人照合）は Phase9 以降の拡張スコープとする。
-> 
 
 ### 将来の処理フロー（参考）
 
@@ -285,7 +300,6 @@ AIが「報告」／「要対応」を分類。**要対応のみチケット化�
     
     ```json
     { "type": "要対応", "summary": "暗証番号が合わず入室できない" }
-    
     ```
     
 4. `type="要対応"` の場合：
@@ -316,9 +330,16 @@ AIが「報告」／「要対応」を分類。**要対応のみチケット化�
 
 - 本部側：`/ai/meetings_admin.php` で空き枠設定（`hq_meeting_slots`）。
 - 加盟店側：`/shop/meetings.php` からMTG予約（`hq_meetings`）。
+- MTGの実施ツール：
+    - v1.4 では **Google Meet を標準ツール** とする。
+    - 本部メンバーが自分の Google アカウントで Meet を作成し、発行された参加URLを `hq_meetings.meeting_join_url` に手動登録する。
+    - `meeting_tool` カラムは将来拡張用の ENUM とし、v1.4 では `google_meet` 固定とする。
 - 通知：
-    - 予約確定時 → ChatWork／メールで双方に通知
-    - 直前リマインダー → cron で自動送信
+    - 予約確定時 → ChatWork／メールで双方に通知（本文に `meeting_join_url` を含める）
+    - 直前リマインダー → `cron_meeting_reminders.php` で自動送信（同じく `meeting_join_url` を含める）
+- API 連携の範囲：
+    - v1.4 では Google Calendar／Google Meet API との直接連携は行わない。
+    - カレンダー同期や自動 MTG 作成は Phase9 以降の拡張スコープとし、本フェーズでは「URL を保持・通知する」レベルに留める。
 
 ---
 
@@ -338,7 +359,7 @@ Phase0で次を定義済みとする（詳細は `PHASE_00_DB_CORE.md` / `db_fie
 - `owners`／`owner_contacts` … オーナー／本部のマスタ＆担当者
 - `shops`／`shop_secrets`／`shop_links`／`shop_internal_info` … 店舗とその周辺情報
 - `options_master`／`shop_options` … 店舗オプション（運用フラグ）
-- `fee_items`／`fee_packages`／`package_components` … 課金アイテム・パッケージ
+- `fee_items`／`fee_packages`／`package_components` …課金アイテム・パッケージ
 - `shop_fee_package_assignments`／`shop_fee_addons`／`shop_royalty_history` … 店舗別契約・ロイヤリティ履歴
 - `supply_items`／`shop_supplies` … 備品マスタと発注履歴
 - `sales_records` … STORES売上データの統合テーブル
@@ -369,6 +390,7 @@ Phase0で次を定義済みとする（詳細は `PHASE_00_DB_CORE.md` / `db_fie
 | SMS追撃 | Twilio | チケット未返信／要対応案件 |
 | OpenAI API | HTTPS | AI分類・回答生成 |
 | STORES API | HTTPS | 顧客照合／予約確認 |
+| Google Meet | URL管理のみ | v1.4ではAPI連携を行わず、MTG参加URL（`hq_meetings.meeting_join_url`）を保持・通知するのみ |
 | RemoteLock API | （将来）HTTPS | v1.4ではインターフェースのみ。実連携は将来実装。 |
 | LINE | Messaging API + LIFF | 顧客トーク／本人認証 |
 
@@ -463,7 +485,6 @@ Phase0で次を定義済みとする（詳細は `PHASE_00_DB_CORE.md` / `db_fie
         
 
 > sales_records の詳細カラム構成は PHASE_00_DB_CORE.md を参照。
-> 
 
 ---
 
@@ -471,9 +492,9 @@ Phase0で次を定義済みとする（詳細は `PHASE_00_DB_CORE.md` / `db_fie
 
 | 名称 | 実行時刻 | 内容 |
 | --- | --- | --- |
-| `cron_invoices.php` | 毎月1日 03:00 | 請求PDF生成・送信 |
+| `cron_invoices.php` | 毎月1日 03:00 | 請求PDF生成・送信（詳細は PHASE_05_AI_INBOX を参照） |
 | `cron_sms_followup.php` | 5分間隔 | 未返信チケット追撃SMS |
-| `cron_meeting_reminders.php` | 毎日 | MTG前日／1h前リマインド送信 |
+| `cron_meeting_reminders.php` | 毎日 | MTG前日／1h前リマインド送信（`hq_meetings.meeting_join_url` を本文に含める） |
 | `cron_backup_db.php` | 毎日3:30 | DBバックアップ（7世代保持） |
 | `cron_sales_import.php` | 月次 or 任意 | STORES売上CSV取込 → `sales_records` 更新 |
 
