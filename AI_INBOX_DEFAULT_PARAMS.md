@@ -342,3 +342,34 @@ ai_inbox:
     description: "請求書の発行（sentステータスへの変更）が許可されるロール。"
 
 ```
+
+---
+
+## --- ロイヤリティ特例関連 ---
+
+```yaml
+  royalty_relief_check_enable:
+    value: true
+    type: bool
+    scope: "global"
+    description: "ロイヤリティ特例ルールの条件チェック・アラート機能を有効にするか。"
+
+  royalty_relief_check_lookback_months:
+    value: 1
+    type: int
+    scope: "global"
+    description: "月間売上ベースの特例条件チェックで対象とする月数（通常は直近1ヶ月）。"
+
+  royalty_relief_alert_channel:
+    value: "ticket"
+    type: string
+    scope: "global"
+    description: "条件達成時のアラート手段。'ticket'（INBOX用チケット作成）または'sys_event'。"
+
+  royalty_relief_rule_edit_role:
+    value: "hq_admin"
+    type: string
+    scope: "global"
+    description: "ロイヤリティ特例ルールを追加・変更できるHQロール。"
+
+```
