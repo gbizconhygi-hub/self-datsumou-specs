@@ -500,14 +500,95 @@ CREATE TABLE shop_royalty_relief_rules (
 
 ## 8. MTG／電話相談管理（hq_meeting_slots／hq_meetings）
 
-※ここは前回案と変わらず。要旨のみ：
+### 8.1 目的
 
-- meeting_type：`routine_checkin`／`trouble_consult`／`fc_contract`／`marketing_planning`／`phone_light` など
-- 各 meeting_type に `booking_mode`（direct_slot／request_and_confirm）を定義。
-- SHOP_PORTAL からの予約 → hq_meeting_slots／hq_meetings を利用。
-- AI-INBOXからチケット詳細画面経由で「この案件でMTG提案」ボタン。
+- オーナー／店舗からの相談案件に対し、「テキストだけでは難しい」ものを本部 MTG（オンライン面談／電話）にスムーズに引き上げる。
+- MTG 枠の管理（hq_meeting_slots）と、実際の予約レコード（hq_meetings）を HQ 側で一元管理する。
+- v1.4 時点では **Google Meet を標準 MTG ツール** とし、API 連携は行わず「参加 URL を保持・通知するだけ」の運用とする。
 
-🔧 主なパラメータ：`hq_mtg.default_visible_days`／`hq_mtg.max_requests_per_month_per_shop`／`hq_mtg.ai_suggestable_types`／`hq_mtg.enable_phone_light`
+### 8.2 データモデル（hq_meetings 拡張）
+
+- hq_meeting_slots … 本部側の「空き枠」定義テーブル（既存仕様通り）。
+- hq_meetings … 実際に予約された MTG／電話相談のレコード。v1.4 では次のカラムを追加する。
+
+```sql
+ALTER TABLE hq_meetings
+  ADD COLUMN meeting_tool ENUM('google_meet','other')
+    NOT NULL DEFAULT 'google_meet'
+    COMMENT 'MTG ツール種別（v1.4 は google_meet 固定）'
+    AFTER mode,
+  ADD COLUMN meeting_join_url VARCHAR(512) NULL
+    COMMENT '参加用URL（v1.4では Google Meet URL）'
+    AFTER meeting_tool,
+  ADD COLUMN created_by_user_id BIGINT UNSIGNED NULL
+    COMMENT 'このMTGレコードを作成した HQ ユーザー（portal_users.id）'
+    AFTER owner_id;
+
+```
+
+- `meeting_tool`
+    - 将来 Zoom 等を追加できるよう enum とするが、v1.4 では `google_meet` 固定。
+- `meeting_join_url`
+    - 本部メンバーが Google Calendar / Meet 上で作成したミーティングの参加 URL を手動で貼り付ける。
+    - SHOP_PORTAL・通知（ChatWork／メール）・cron リマインドはいずれもこの URL をそのままリンクとして利用する。
+- `created_by_user_id`
+    - どの HQ ユーザー（portal_users.id）が MTG を作成したかの監査用。
+    - audit_logs と合わせて、責任の所在を明確にする。
+
+### 8.3 meeting_type／booking_mode
+
+- meeting_type（既存）：
+    - `routine_checkin` … 定期的な運営状況ヒアリング
+    - `trouble_consult` … トラブル相談（顧客対応／設備トラブル 等）
+    - `fc_contract` … 契約相談／解約相談 等
+    - `marketing_planning` … 集客・キャンペーン相談
+    - `phone_light` … 軽い電話相談枠 など
+- 各 meeting_type に対し、`booking_mode` を設定する（SYS_CORE／AI_CORE 側で利用）。
+    - `direct_slot` … SHOP_PORTAL から空き枠を直接選択して予約確定
+    - `request_and_confirm` … 予約希望を HQ が見てから確定（枠調整含む）
+
+### 8.4 AI-INBOX 側フロー
+
+1. HQ が AI-INBOX で対象チケット詳細を開く。
+2. 「この案件で MTG 提案」ボタンを押すと、次を入力するモーダルを表示。
+    - meeting_type
+    - 対象店舗／オーナー
+    - 希望日時（hq_meeting_slots から選択、もしくは request_and_confirm）
+3. HQ が自分の Google アカウントで Google Meet を作成し、参加 URL をコピー。
+4. モーダル内の「Google Meet 参加URL（任意）」欄に `meeting_join_url` として貼り付けて保存。
+5. 保存時の挙動：
+    - hq_meetings レコードを作成／更新（meeting_tool='google_meet', meeting_join_url に URL を格納）。
+    - SHOP_PORTAL から参照可能な状態にする（オーナー／スタッフは「Google Meet に参加」ボタンで遷移）。
+    - ChatWork／メール通知に `meeting_join_url` を差し込む（詳細は 8.6）。
+
+> v1.4 では Google Calendar / Google Meet API による自動作成・キャンセル連動は行わない。
+> 
+> 
+> 予約内容の変更・キャンセルは、HQ が Google Calendar 側と hq_meetings を **両方手動で更新** する運用とする。
+> 
+
+### 8.5 SHOP_PORTAL 側との連携
+
+- SHOP_PORTAL（Phase4）の MTG 画面では、hq_meetings を以下のように利用する。
+    - 「このミーティングは Google Meet で実施されます」という説明文を表示。
+    - 「Google Meet に参加」ボタンから `meeting_join_url` を新規タブで開く。
+- meeting_tool が将来 `other` などに拡張された場合でも、
+    - 少なくとも「参加 URL を 1 本持つ」という前提は維持し、
+        
+        SHOP_PORTAL 側は `meeting_join_url` をシンプルにリンクとして扱う。
+        
+
+### 8.6 通知・リマインダーとの連携
+
+- MTG 確定時：
+    - ChatWork 通知テンプレート／メール通知テンプレートに `meeting_join_url` を差し込む。
+    - 「参加用リンク」として本文中に明示し、オーナー／スタッフがワンクリックで参加できるようにする。
+- `cron_meeting_reminders.php`（Phase7：CRON_SYS）：
+    - リマインド対象の hq_meetings を走査し、前日／1時間前などのタイミングでリマインド通知を送る。
+    - 通知本文には必ず `meeting_join_url` を含める。
+- MTG 内での会話内容そのものは本システムでは扱わず、
+    - 必要に応じて HQ が別途議事録やメモを管理する（Google Docs 等）。
+    - システム側では「議事録ファイルの URL」など、最低限のリンクのみを扱う。
 
 ---
 
@@ -615,4 +696,4 @@ CREATE TABLE ticket_tags (
 - 拡張フェーズ（STORES自動取込・RemoteLOCK本格連携）
     - APIベースで sales_records を自動同期し、RemoteLOCK障害案件をKPIに反映する拡張。
 
-以上、ロイヤリティ特例ルール差分を反映した PHASE_05_AI_INBOX 仕様書 v1.1 Draft とする。
+以上、ロイヤリティ特例ルール差分と Google Meet 前提の MTG 仕様を反映した PHASE_05_AI_INBOX 仕様書 v1.1 Draft とする。
