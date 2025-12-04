@@ -9,24 +9,26 @@
 - レイヤ: AI_CORE 配下のサブモジュール
 - 本フェーズの目的:
     - 電話代行オペレーターからの「緊急連絡メール」を受信し、
-        - 店舗を自動特定（できる範囲で）
+        - 店舗を自動特定（可能な範囲で）
         - AI で「解決済みか / 追加フォローが必要か」「フォロー緊急度」を判定
         - 未解決案件のみ `tickets` としてタスク化し、ChatWork / SMS / SHOP_PORTAL に連携
         - すべてのメールを `operator_mail_logs` にログとして残し、学習・監査の SoR とする
 
 ### 1.2 他フェーズとの関係
 
-- spec_v1.4_base で定義された役割の具体化フェーズ。
-- PHASE_04_SHOP_PORTAL:
+- `spec_v1.4_base.md`
+    - OP_MAIL の思想（電話代行の緊急報告メールを AI で分類し、要対応のみチケット化）の具体化フェーズ。
+- `PHASE_04_SHOP_PORTAL.md`
     - OP_MAIL 由来チケットを「電話代行緊急連絡」として店舗側に表示し、
     LINE / メール（noreply + HELP）による顧客対応フローを提供する。
-- PHASE_05_AI_INBOX:
-    - HQ 向け INBOX として、全チャネル（help./line./shop./OP_MAIL）の tickets を統合管理する。
-- PHASE_07_CRON_SYS:
+- `PHASE_05_AI_INBOX.md`
+    - HQ 向け INBOX として、全チャネル（help./line./shop./OP_MAIL）の `tickets` を統合管理する。
+- `PHASE_07_CRON_SYS.md`
     - CRON_SYS とは独立。OP_MAIL は **Push トリガ専用** とし、cron によるメールポーリングは行わない。
-- AI_CORE:
+- `PHASE_03_LINE_UI.md` / AI_CORE
     - `channel='op_mail'` として AI コアに分類処理を委譲し、
-    「フォロー緊急度」「インシデント種別」「店舗連絡結果」などのラベルを返してもらう。
+    「フォロー緊急度」「インシデント種別」「加盟店への電話結果」などのラベルを返してもらう。
+    - LINE↔STORES 会員の紐づけは、自社 DB（`customer_links` 等）側で保持。
 
 ---
 
@@ -34,41 +36,65 @@
 
 ### 2.1 用語
 
-- 電話代行オペレーター:
-    - 外注コールセンターを想定。お客様との電話を受け、
-    一次対応と加盟店へのエスカレーションを行う。
-- 緊急連絡メール:
-    - オペレーターが一次対応後に送る業務報告メール。
-    - 対象は「無人サロンの運営に影響するインシデント」が前提。
-- 解決済み（resolved）:
-    - 電話中にオペレーター対応のみで完結しており、加盟店からの追加連絡が不要な案件。
-- 未解決（unresolved）:
-    - オペだけでは完結せず、「加盟店による STORES 予約確認」「補償判断」「折返し連絡」等が必要な案件。
+- 電話代行オペレーター
+    
+    外注コールセンターを想定。お客様との電話を受け、一次対応と加盟店へのエスカレーションを行う。
+    
+- 緊急連絡メール
+    
+    オペレーターが一次対応後に送る業務報告メール。
+    
+    対象は「無人サロンの運営に影響するインシデント（鍵・機械・設備・クレーム等）」。
+    
+- 解決済み（resolved）
+    
+    電話中にオペレーター対応のみで完結しており、加盟店からの追加連絡が不要な案件。
+    
+    例:
+    
+    - 暗証番号を誤って入力していた → 正しい番号を案内し、解錠確認済み。
+    - 忘れ物 → 数分以内に再入室してお客様自身で回収済み。
+- 未解決（unresolved）
+    
+    オペだけでは完結せず、「加盟店による STORES 予約確認」「補償判断」「折返し連絡」等が必要な案件。
+    
+    例:
+    
+    - 謝罪の上お帰りいただいた。
+    - 予約が確認できていないように見える。
+    - 加盟店に電話したが出ず、そのまま終話せざるを得なかった。
 
 ### 2.2 本フェーズの前提
 
 - 真の「超緊急」（電話が切れないレベル）の案件は、
-オペレーターが **その場で加盟店に電話してエスカレーション** する運用とし、
-OP_MAIL はその **事後報告とフォロータスク化** を担当する。
+    
+    オペレーターが **その場で加盟店に電話してエスカレーション** する運用とする。
+    
+    → それで対応できた案件については、OP_MAILでの再エスカレーションは不要。
+    
 - STORES 予約状況の最終判断は **加盟店のみが行える**。
-OP_MAIL は STORES を直接見に行かず、
-SHOP_PORTAL から加盟店が会員番号 / 予約ID を入力することで会員特定を行う前提とする。
+    - OP_MAIL は STORES を直接参照せず、
+    - SHOP_PORTAL 上で加盟店が STORES 画面を見ながら「会員番号 / 予約ID」を入力し、
+    バックエンドが API で照合する形で本人特定・LINE紐づき確認を行う。
 - LINE ID は STORES には存在せず、
-LINE↔STORES 会員の紐づけは自社 DB（`customer_links` 等）を SoR とする。
+    
+    LINE↔STORES 会員の紐づけは自社 DB（`customer_links` 等）を SoR とする。
+    
+    → 「LINEで返信」可否は、`customer_links(channel='line')` によって判定する。
+    
 
 ---
 
 ## 3. メール受信アーキテクチャと I/O 契約
 
-### 3.1 全体像
+### 3.1 全体像（Push 型）
 
-1. 電話代行オペレーターは、
-緊急連絡用の共通アドレス（例: `emergency@self-datsumou.net`）に報告メールを送る。
-2. メールサーバ / プロバイダ側で、
-新着メールを HTTP Webhook で `op_mail_ingest` エンドポイントに POST する。
+1. 電話代行オペレーターは、緊急連絡用共通アドレス（例: `emergency@self-datsumou.net`）を To に指定し、
+    - 必ず該当店舗のメールアドレス（`shops.shop_email`）も To に含めて送信する。
+2. メールサーバ / プロバイダ側で、新着メールを HTTP Webhook として `op_mail_ingest` エンドポイントに POST する。
 3. `op_mail_ingest` がメール内容を受け取り、
-    - 店舗特定
-    - AI分類
+    - 店舗特定（Toヘッダ）
+    - AI分類（フォロー緊急度・インシデント種別・加盟店への電話結果など）
     - `operator_mail_logs` への記録
     - 必要に応じて `tickets` 起票
     - ChatWork / SMS 通知
@@ -84,12 +110,15 @@ LINE↔STORES 会員の紐づけは自社 DB（`customer_links` 等）を SoR �
 - 認証
     - リクエストヘッダ:
         - `X-Op-Mail-Token: <固定トークン>`
-            - `.env` 等に `OP_MAIL_WEBHOOK_TOKEN` として格納。
+            - `.env` などに `OP_MAIL_WEBHOOK_TOKEN` として格納。
+    - ネットワークレベル:
         - 送信元 IP を firewall / Web サーバ設定で制限（電話代行メールサーバの IP のみ許可）。
     - オプション:
-        - プロバイダが HMAC 署名をサポートする場合、`X-Signature` 等を追加検証。
+        - プロバイダ側が HMAC 署名をサポートする場合、`X-Signature` 等を追加検証。
 
-### 3.3 リクエスト payload（プロバイダ非依存の抽象仕様）
+### 3.3 リクエスト payload（抽象仕様）
+
+プロバイダに依存しない共通形式として、以下の JSON を受け取る前提とする。
 
 ```json
 {
@@ -107,7 +136,7 @@ LINE↔STORES 会員の紐づけは自社 DB（`customer_links` 等）を SoR �
   ],
   "body_text": "プレーンテキスト本文（省略可）",
   "body_html": "<p>HTML本文（省略可）</p>",
-  "headers_json": "{... 生のヘッダをJSON化したもの ...}",
+  "headers_json": "{... 生ヘッダのJSON ...}",
   "attachments": [
     {
       "filename": "photo1.jpg",
@@ -121,17 +150,13 @@ LINE↔STORES 会員の紐づけは自社 DB（`customer_links` 等）を SoR �
 
 ```
 
-- 必須項目:
+- 必須:
     - `provider`, `provider_message_id`, `subject`, `from`, `to[]`, `received_at`
-- `body_text` が無い場合はサーバ側で HTML→テキスト変換を行う。
-- 添付ファイルは v1.4 では分類にのみ利用（あれば AI へのヒントとして渡す）。
-    
-    UI上での表示や保存位置は将来拡張とする。
-    
+- `body_text` が無い場合は、サーバ側で HTML→プレーンテキスト変換を行う。
 
-### 3.4 レスポンス payload
+### 3.4 レスポンス
 
-- 正常（新規処理）:
+- 正常（新規処理）
 
 ```json
 {
@@ -143,7 +168,7 @@ LINE↔STORES 会員の紐づけは自社 DB（`customer_links` 等）を SoR �
 
 ```
 
-- 正常（重複）:
+- 正常（重複）
 
 ```json
 {
@@ -154,36 +179,36 @@ LINE↔STORES 会員の紐づけは自社 DB（`customer_links` 等）を SoR �
 ```
 
 - 認証エラー: HTTP 401
-- バリデーションエラー: HTTP 400 + エラー理由
+- バリデーションエラー: HTTP 400 + `{ "error": "..." }`
 - サーバ内部エラー: HTTP 500
 
 ---
 
-## 4. シーケンス（メール受信〜AI分類〜チケット化〜通知）
+## 4. シーケンス（受信〜分類〜タスク化〜通知）
 
 ### 4.1 高レベルシーケンス
 
 1. Webhook 受信
-    - 認証・入力バリデーション。
+    - 認証・JSON バリデーションを実行。
 2. 重複チェック
-    - `provider_message_id` で `operator_mail_logs` を検索。
-    - 既に存在すれば `status=duplicate` を返し終了（idempotent）。
+    - `provider_message_id` をキーに `operator_mail_logs` を検索。
+    - 既に存在すれば `status=duplicate` で早期リターン（idempotent）。
 3. 店舗特定
-    - `to[]` から店舗メールアドレスを抽出し、`shops` テーブルと突き合わせて `shop_id` を決定。
+    - `to[]` のメールアドレスと `shops.shop_email` を突き合わせて `shop_id` を決定。
 4. 正規化テキスト生成
-    - 件名 + 本文（プレーンテキスト化）をまとめて `normalized_text` を作成。
+    - 件名 + 本文を元に `normalized_text` を生成（HTML→テキスト変換 + 不要署名の削除など）。
 5. AI コア呼び出し
-    - `normalized_text` と補助情報を `AI_CORE_REQUEST` として送信。
-6. AI応答に基づく分類
+    - `channel='op_mail'` として `normalized_text` + メタ情報を AI_CORE に送信。
+6. AI 応答に基づく分類
     - `resolution_status`（resolved/unresolved）
     - `follow_urgency`（high/normal/none）
-    - `incident_category` 等を受け取る。
-7. `operator_mail_logs` への保存
-    - 生メール + AI判定 + 店舗ID を1レコードにまとめる。
-8. 解決済み/未解決の分岐
-    - `resolution_status='resolved'` または `follow_urgency='none'`
+    - `incident_category` 等を取得。
+7. `operator_mail_logs` への記録
+    - 生メール + AI 判定 + 店舗 ID + ステータスを 1 レコードにまとめる。
+8. 解決済み / 未解決 の分岐
+    - `resolution_status='resolved'` or `follow_urgency='none'`
         
-        → ログのみ（SHOP_PORTAL には「緊急連絡があった」という通知カード）。
+        → ログのみ（SHOP_PORTAL には「緊急連絡があった」履歴カード）。
         
     - それ以外（未解決）
         
@@ -194,37 +219,35 @@ LINE↔STORES 会員の紐づけは自社 DB（`customer_links` 等）を SoR �
 
 ---
 
-## 5. 内部処理ロジック
+## 5. 内部処理ロジック詳細
 
 ### 5.1 店舗特定ロジック
 
-### 5.1.1 前提
+### 5.1.1 ポリシー
 
-- メール本文中の店舗名表記（漢字・カナ等）は誤記が多いため、
-    
-    自動店舗特定には使用しない。
-    
-- `to[]` に、必ず「該当店舗の店舗メールアドレス」が含まれている前提で運用する。
+- メール本文中の店舗名表記（漢字・カナ等）は誤記が多いため、**自動店舗特定には使用しない**。
+- 自動判定の唯一の根拠は `to[]` に含まれる店舗メールアドレス（`shops.shop_email`）とする。
 
 ### 5.1.2 アルゴリズム
 
-1. `to[]` の各要素からメールアドレス部分だけを抽出（`name <addr>` → `addr`）。
-2. `shops.shop_email` と一致するレコードを検索。
-3. 振る舞い:
-    - 一意に 1 店舗にマッチした場合:
-        - `shop_id` にその店舗IDをセット。
+1. `to[]` の各要素からメールアドレス部分のみ抽出する。
+2. `shops` テーブルで `shop_email` が一致する店舗を検索。
+3. 結果:
+    - 一意に 1 件:
+        - `shop_id` にその ID をセット。
+        - `shop_resolve_status='resolved'`。
     - 0 件:
-        - `shop_id = NULL` とし、`operator_mail_logs.shop_resolve_status='pending'` とする。
-        - SHOP_PORTAL 側で「店舗を選択してください」UI を出す前提。
+        - `shop_id = NULL`
+        - `shop_resolve_status='pending'`
+        - SHOP_PORTAL 側で「店舗を選択してください」UI を出す想定。
     - 複数件:
-        - `shop_id = NULL`、`shop_resolve_status='ambiguous'`。
-        - SHOP_PORTAL で選択させる。
+        - `shop_id = NULL`
+        - `shop_resolve_status='ambiguous'`
+        - SHOP_PORTAL 側で選択させる。
 
 ### 5.2 AI分類仕様
 
 ### 5.2.1 AI_CORE_REQUEST（論理）
-
-AIコアへの入力は概ね次のような JSON を想定する：
 
 ```json
 {
@@ -245,8 +268,6 @@ AIコアへの入力は概ね次のような JSON を想定する：
 
 ### 5.2.2 AI_CORE_RESPONSE（論理）
 
-AIからは以下のような分類結果を受け取る：
-
 ```json
 {
   "follow_urgency": "high | normal | none",
@@ -263,247 +284,206 @@ AIからは以下のような分類結果を受け取る：
 
 ```
 
+- `follow_urgency`
+    - high: 早め（基本その日中・場合によっては即）にフォローすべき。
+    - normal: 今日〜数日以内にフォローできれば良い。
+    - none: フォロー不要（オペで完結）。
+- `resolution_status`
+    - resolved: その場で完全に解決しており、追加フォロー不要。
+    - unresolved: 加盟店による追加対応が必要。
 - `owner_contact_status`
-    - 「オペレーターが加盟店に電話したか / つながったか」の結果をメール文面から推定。
-    - `no_answer` / `line_busy` の場合は、後述のとおり `follow_urgency` を強制的に `high` に引き上げる。
+    - `not_called`: そもそも加盟店には電話していない。
+    - `reached`: 加盟店に電話がつながり、引き継ぎ済み。
+    - `no_answer`: 呼び出しはしたが出なかった。
+    - `line_busy`: 話し中等でつながらなかった。
+    - `unknown`: メール文面から判別できない。
 
-### 5.2.3 フォロー緊急度 `follow_urgency` の決定ルール
+### 5.2.3 フォロー緊急度の最終決定
 
-サーバ側では、AI応答を受けて次のように最終 `follow_urgency` を決定する。
+サーバ側では、AI 応答を受けて以下のルールで最終 `follow_urgency` を決定する。
 
-1. まず AI 応答そのものを受け取る（`ai_follow_urgency`）。
-2. 次に `owner_contact_status` を評価:
-    - `owner_contact_status in ('no_answer', 'line_busy')` の場合:
-        - 加盟店に本来リアルタイムで引き継ぐべきだったのに出来ていないとみなし、
-            - `follow_urgency = "high"` に上書きする。
-3. `resolution_status` との整合:
-    - `resolution_status = 'resolved'` の場合は最終的に `follow_urgency = 'none'` とみなす。
+1. AI応答を `ai_follow_urgency` として受け取る。
+2. `owner_contact_status` を評価:
+    - `owner_contact_status in ('no_answer','line_busy')` の場合:
+        - 本来リアルタイムで引き継ぐべき案件が未対応のまま終話しているとみなし、
+            
+            `follow_urgency = "high"` に上書きする（AI 判定より優先）。
+            
+3. `resolution_status` を評価:
+    - `resolution_status='resolved'` の場合は、最終的に `follow_urgency='none'` とみなす。
 
-### 5.3 解決済み / 未解決の判定とチケット起票
+この「AI判定 vs ルール上書き vs 最終値」は `operator_mail_logs` に両方保持し、
+
+学習時には最終値をラベルとして使用する。
+
+### 5.3 解決済み / 未解決の分岐とチケット化
 
 ### 5.3.1 判定
 
-- 解決済み（resolved）:
-    - `resolution_status = 'resolved'`
-        
-        （例: 鍵の番号案内後に解錠確認済み、忘れ物を即回収済み 等）
-        
-- 未解決（unresolved）:
-    - `resolution_status = 'unresolved'` で、かつ
-    - `follow_urgency in ('high', 'normal')`
+- 解決済み:
+    - `resolution_status='resolved'`
+    - もしくはルール上 `follow_urgency='none'` となったもの。
+- 未解決:
+    - `resolution_status='unresolved'` かつ `follow_urgency in ('high','normal')`。
 
 ### 5.3.2 振る舞い
 
 - 解決済み:
     - `operator_mail_logs` のみ作成。
-    - SHOP_PORTAL には「○月△日 xx:xx 緊急連絡があり、オペレーター対応で解決済み」といった履歴カードを表示する（Phase4 側UI）。
-    - `tickets` 起票なし。
+    - SHOP_PORTAL には「〇月△日 xx:xx 緊急連絡があり、オペレーター対応で解決済み」といった履歴カードを表示（Phase4 側）。
+    - `tickets` 起票は行わない。
 - 未解決:
     - `operator_mail_logs` + `tickets` を作成。
-    - `follow_urgency=high` / `normal` に応じた通知を行う。
+    - SHOP_PORTAL の「要対応チケット一覧」に表示される。
+    - フォロー緊急度に応じて通知レベル・SLA を変える（後述）。
 
-### 5.4 tickets 起票仕様
+### 5.4 `tickets` 起票仕様
 
-### 5.4.1 `tickets.source` の扱い（他フェーズからの差分）
+### 5.4.1 `tickets.source` の扱い
 
-- AI_INBOX_POLICY / SHOP_PORTAL の記述に合わせ、
+- `tickets.source` の enum に `'operator_mail'` を追加し、
     
-    `tickets.source` に `'operator_mail'` を新たに追加する。
+    OP_MAIL由来のチケットは `source='operator_mail'` で統一する。
     
-- PHASE_00_DB_CORE の `tickets.source` enum に対する差分:
-    - 既存: `'stores_form','customer_line','hp_form','portal_owner','portal_admin'`
-    - 追加: `'operator_mail'`
-- 互換性:
-    - 既存の `'portal_admin'` は従来どおり本部起点の手動起票等に利用。
-    - OP_MAIL 由来チケットは `source='operator_mail'` で統一し、
-        
-        `category` に `operator_mail.follow_high` 等を設定する。
-        
+- 既存の `'portal_admin'` は本部起点の手動起票用として維持。
 
-### 5.4.2 起票内容
+### 5.4.2 category / priority 相当
 
-- 共通フィールド例:
+- `category` 例:
+    - `operator_mail.follow_high`
+    - `operator_mail.follow_normal`
+- priority カラムは存在しないため、
+    
+    緊急度は `category` と AI-INBOX / SHOP_PORTAL 側の UI ロジックで表現する。
+    
+
+### 5.4.3 起票内容例
 
 | フィールド | 値の例 |
 | --- | --- |
-| source | `'operator_mail'` |
+| source | `operator_mail` |
 | shop_id | 店舗特定ロジックで決定した ID |
 | owner_id | `shops.owner_id` |
-| title / subject | `[OP] 鍵が開かずご利用できない可能性あり` |
-| description/body | AI summary + 原文テキストの一部 |
+| subject/title | `[OP] 鍵が開かずご利用できない可能性あり` など |
+| body/description | AI summary + 報告メール本文のテキスト |
 | category | `operator_mail.follow_high` / `.follow_normal` |
-| status | `open`（初期） |
+| status | `open` |
 | created_by_type | `system` |
 | created_by_id | `NULL` |
-- `follow_urgency` ごとのカテゴリ例:
-    - high: `category='operator_mail.follow_high'`
-    - normal: `category='operator_mail.follow_normal'`
-
-### 5.5 「対応不要で完了」操作（SHOP_PORTAL）
-
-### 5.5.1 加盟店 UI
-
-- SHOP_PORTAL の OP_MAIL チケット詳細画面には常に以下の2ボタンを表示する:
-    - [顧客に対応する] … LINE / メール + HELP 誘導フローへ
-    - [対応不要で完了] … AI 誤判定・その場解決などで、追加対応不要と判断した場合
-
-### 5.5.2 バックエンド動作
-
-[対応不要で完了] 実行時:
-
-1. `tickets` 更新:
-    - `status = 'closed'`
-    - `close_reason = 'op_mail_resolved_before'`（追加）
-2. `operator_mail_logs` 更新:
-    - `final_follow_urgency = 'none'`
-    - `final_resolution_status = 'resolved'`
-    - `final_decided_by = {現在のポータルユーザーID}`
-    - `final_decided_at = NOW()`
-3. フォローアップ系 CRON（SLA 追撃）の除外条件:
-    - `status='closed' AND close_reason='op_mail_resolved_before'` を対象外とする。
-4. 学習用途:
-    - `ai_follow_urgency ≠ final_follow_urgency` の場合は、
-        
-        後述の `op_mail_training_samples` に抽出可能な候補としてフラグ付け。
-        
 
 ---
 
-## 6. SHOP_PORTAL / AI-INBOX との連携（概要）
+## 6. SHOP_PORTAL / AI-INBOX 連携（挙動の前提）
 
-※詳細な画面仕様・ルーティングは Phase4 / Phase5 側に委ね、本ドキュメントでは必要な I/O 前提のみ定義する。
+詳細な画面仕様は各 Phase に委ね、本フェーズでは挙動の「前提条件」のみ定義する。
 
-### 6.1 SHOP_PORTAL 側
+### 6.1 SHOP_PORTAL 側（加盟店UI）
 
-- 解決済み（ログのみ）:
-    - 「OP_MAIL 緊急連絡履歴」セクションにカード表示。
-- 未解決（チケット化）:
-    - 通常の「要対応チケット一覧」に `source='operator_mail'` で混在表示。
+- 解決済み (`resolution_status='resolved'`):
+    - 「OP_MAIL 緊急連絡履歴」セクションに履歴カードとして表示。
+    - クリックで `operator_mail_logs` の詳細（報告全文）を閲覧できる。
+    - タスク（要対応チケット）には出さない。
+- 未解決（タスク化）:
+    - 通常の「要対応チケット一覧」に `source='operator_mail'` で表示。
     - チケット詳細には:
-        - メール原文（プレーンテキスト）
-        - AI summary / incident_category / follow_urgency
-        - 顧客特定パネル（会員番号 / 予約ID 入力 → API で照合）
-        - 「LINEで返信」「メールで返信」「対応不要で完了」ボタン
-            
-            （LINE紐づき有無に応じて有効/無効）
-            
+        - 店舗名 / 受信日時 / AI summary / incident_category / follow_urgency
+        - 電話代行報告メール全文（プレーンテキスト表示）
+        - 顧客特定パネル:
+            - 「STORES管理画面で該当の会員 / 予約を開いてください」
+            - 「会員番号または予約IDを入力してください」
+            - [照合] ボタン → サーバが STORES API / 自社 DB で確認
+        - 連絡ボタン:
+            - LINE紐づきがある場合:
+                - [LINEで返信] ボタン有効
+            - 紐づきが無い場合:
+                - [メールで返信] ボタン（noreply + HELP誘導）
+            - 常に:
+                - [対応不要で完了] ボタン（AI誤判定・その場解決時）
 
-### 6.2 AI-INBOX 側（HQ）
+### 6.2 SHOP_PORTAL からの「対応不要で完了」
 
-- `source='operator_mail'` のチケットは、
+- [対応不要で完了] 実行時:
+    - `tickets.status='closed'`
+    - `tickets.close_reason='op_mail_resolved_before'`（追加）
+    - `operator_mail_logs.final_follow_urgency='none'`
+    - `operator_mail_logs.final_resolution_status='resolved'`
+    - `operator_mail_logs.final_decided_by` / `final_decided_at` を更新
+- このチケットは:
+    - SLAフォローアップCRONの対象外とする。
+    - AI-INBOX では「店舗判断で対応不要」バッジ付きで closed として表示する。
+
+### 6.3 AI-INBOX 側（HQ UI）
+
+- `source='operator_mail'` のチケットは、フィルタやバッジで「電話代行」と明示。
+- `close_reason='op_mail_resolved_before'` の件は、
     
-    「電話代行」フィルタやバッジ表示で優先して確認できるようにする。
-    
-- close_reason が `op_mail_resolved_before` のものは
-    
-    「店舗判断で対応不要」として識別できる。
+    AI誤判定や「その場解決だった案件」として集計・モニタリングが可能。
     
 
 ---
 
 ## 7. ログ・監査・学習データ
 
-### 7.1 `operator_mail_logs` テーブル（提案DDL）
+### 7.1 `operator_mail_logs` テーブル（DDL 概要）
 
-```sql
-CREATE TABLE operator_mail_logs (
-  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-  provider VARCHAR(32) NOT NULL,
-  provider_message_id VARCHAR(191) NOT NULL,
-  message_id VARCHAR(191) NULL,
-  shop_id BIGINT UNSIGNED NULL,
-  shop_resolve_status ENUM('resolved','pending','ambiguous') NOT NULL DEFAULT 'resolved',
+詳細DDLは `DB_PATCH_07_OP_MAIL.md` を参照。
 
-  raw_subject TEXT NOT NULL,
-  raw_from VARCHAR(191) NOT NULL,
-  raw_to TEXT NOT NULL,
-  raw_cc TEXT NULL,
-  body_text LONGTEXT NULL,
-  body_html LONGTEXT NULL,
-  headers_json LONGTEXT NULL,
-  received_at DATETIME NOT NULL,
+本仕様書では保持すべき情報の構造を定義する。
 
-  -- AI判定
-  ai_follow_urgency ENUM('high','normal','none') NULL,
-  ai_incident_category VARCHAR(64) NULL,
-  ai_follow_type VARCHAR(64) NULL,
-  ai_needs_compensation TINYINT(1) NULL,
-  ai_needs_store_reservation_check TINYINT(1) NULL,
-  ai_owner_contact_status ENUM('not_called','reached','no_answer','line_busy','unknown') NULL,
-  ai_resolution_status ENUM('resolved','unresolved') NULL,
-  ai_summary TEXT NULL,
-  ai_notes_for_owner TEXT NULL,
-  ai_confidence DECIMAL(4,3) NULL,
+- 生メール情報:
+    - provider / provider_message_id / message_id
+    - shop_id / shop_resolve_status
+    - raw_subject / raw_from / raw_to / raw_cc
+    - body_text / body_html / headers_json
+    - received_at
+- AI判定:
+    - ai_follow_urgency / ai_incident_category / ai_follow_type
+    - ai_needs_compensation / ai_needs_store_reservation_check
+    - ai_owner_contact_status / ai_resolution_status
+    - ai_summary / ai_notes_for_owner / ai_confidence
+- 最終判定（店舗・HQの上書き結果）:
+    - final_follow_urgency / final_incident_category / final_resolution_status
+    - final_decided_by / final_decided_at
+- 紐づく tickets:
+    - ticket_id
+- 内部ステータス:
+    - status（received/classified/ticket_created/closed/error）
 
-  -- 最終判定（店舗/HQによる上書き）
-  final_follow_urgency ENUM('high','normal','none') NULL,
-  final_incident_category VARCHAR(64) NULL,
-  final_resolution_status ENUM('resolved','unresolved') NULL,
-  final_decided_by BIGINT UNSIGNED NULL,
-  final_decided_at DATETIME NULL,
+### 7.2 学習サンプル `op_mail_training_samples`
 
-  ticket_id BIGINT UNSIGNED NULL,
+- 用途:
+    - OP_MAIL 用 AI分類の教師データ。
+- カラム（概要）:
+    - operator_mail_log_id（元メールへの参照）
+    - shop_id
+    - input_text（学習用に正規化した本文）
+    - label_follow_urgency / label_incident_category / label_resolution_status
+    - label_source（hq/shop/system）
+    - is_active
 
-  status ENUM('received','classified','ticket_created','closed','error')
-    NOT NULL DEFAULT 'received',
+### 7.3 本部管理UIからの勉強データ投入（要件レベル）
 
-  created_at DATETIME NOT NULL,
-  updated_at DATETIME NOT NULL,
-
-  PRIMARY KEY (id),
-  UNIQUE KEY uq_operator_mail_msg (provider_message_id),
-  KEY idx_operator_mail_shop (shop_id),
-  KEY idx_operator_mail_status (status),
-  KEY idx_operator_mail_final (final_resolution_status, final_follow_urgency)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-  COMMENT='電話代行メール取込ログ（AI判定＋最終判定含む）';
-
-```
-
-### 7.2 学習サンプルテーブル `op_mail_training_samples`
-
-```sql
-CREATE TABLE op_mail_training_samples (
-  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-  operator_mail_log_id BIGINT UNSIGNED NOT NULL,
-  shop_id BIGINT UNSIGNED NULL,
-
-  input_text LONGTEXT NOT NULL COMMENT '学習用に正規化した本文（件名＋要約＋本文等）',
-  label_follow_urgency ENUM('high','normal','none') NOT NULL,
-  label_incident_category VARCHAR(64) NULL,
-  label_resolution_status ENUM('resolved','unresolved') NOT NULL,
-
-  label_source ENUM('hq','shop','system') NOT NULL DEFAULT 'hq',
-  is_active TINYINT(1) NOT NULL DEFAULT 1,
-
-  created_at DATETIME NOT NULL,
-  updated_at DATETIME NOT NULL,
-
-  PRIMARY KEY (id),
-  KEY idx_op_mail_train_label (label_follow_urgency, label_incident_category),
-  KEY idx_op_mail_train_log (operator_mail_log_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-  COMMENT='OP_MAIL分類用 学習サンプル';
-
-```
-
-### 7.3 学習データ投入フロー（要件レベル）
-
-- HQ / 本部管理UI から:
-    - `operator_mail_logs` の一覧を検索・絞り込み（期間・店舗・AI判定 vs 最終判定の差分など）。
-    - 各レコードに対し、人間が `final_*` を編集可能。
-    - 「この判定を学習サンプルにする」チェックONで `op_mail_training_samples` にコピー。
-- 学習（モデル改善）自体は AI_CORE / バッチジョブ側の責務とし、
+- HQ 向け管理画面（AI管理UIなど）で:
+    - `operator_mail_logs` の一覧を期間・店舗・AI判定 vs 最終判定の差分などで絞り込み。
+    - 個別レコードの `final_*` ラベルを編集できる。
+    - 「このレコードを学習サンプルとして登録」チェックONで `op_mail_training_samples` にコピー。
+- モデル学習そのものは AI_CORE / バッチジョブ側の責務とし、
     
-    本ドキュメントでは「学習サンプルの構造と SoR」を定義するに留める。
+    本仕様では「学習サンプル構造とソース」を定義する。
     
 
-### 7.4 sys_events / audit_logs との連携
+### 7.4 sys_events / audit_logs 連携
 
 - `sys_events`:
-    - `op_mail.ingest_received` / `op_mail.classify_failed` / `op_mail.ticket_created` / `op_mail.notify_failed` などを記録。
+    - `op_mail.ingest_received`
+    - `op_mail.classify_failed`
+    - `op_mail.ticket_created`
+    - `op_mail.notify_failed`
+        
+        などのイベントを出力。
+        
 - `audit_logs`:
-    - `tickets` の status / close_reason 変更（特に「対応不要で完了」）は監査対象とする。
+    - `tickets` の status / close_reason 変更（特に「対応不要で完了」）を監査対象とする。
 
 ---
 
@@ -512,47 +492,34 @@ CREATE TABLE op_mail_training_samples (
 ### 8.1 Webhook 認証
 
 - `X-Op-Mail-Token` による固定トークン認証。
-- Web サーバ / FW による IP 制限。
-- 対応可能であれば、プロバイダ署名（HMAC）を検証し、署名不一致時は 401 を返す。
+- FW / Webサーバレベルで IP 制限。
+- プロバイダ署名対応時は HMAC 署名も併用。
 
-### 8.2 HTMLメール無害化
+### 8.2 HTML 無害化
 
-- `body_html` は DB に保持しても良いが、
-    
-    UIに表示する際は必ず:
-    
-    - `script` / `style` / `iframe` 等の危険タグ除去
-    - URL クリック時のターゲット制御（別タブ + 警告）
-- SHOP_PORTAL / AI-INBOX では、基本的にプレーンテキスト表示（`body_text`）を優先し、
-    
-    HTMLは折りたたみ表示する。
-    
+- HTMLを DB に保持する場合でも、UI表示時には:
+    - `script` / `style` / `iframe` 等の危険タグ除去。
+    - リンクは別タブ＋注意喚起。
+- SHOP_PORTAL / AI-INBOX では、プレーンテキストを基本とし、HTMLは折りたたみ表示。
 
-### 8.3 個人情報・保持期間
+### 8.3 PII と保持期間
 
-- 電話番号 / メールアドレス / 氏名 等の PII を含むため:
-    - `operator_mail_logs` の保持期間は最低 X ヶ月（要件に応じて設定）とし、
-        
-        それ以上はローテーション / アーカイブを検討。
-        
-    - 学習サンプルでは、本名を直接使わない（可能な範囲で伏字や置き換えも検討）。
+- 電話番号 / メールアドレス / 氏名等の PII を含むため:
+    - `operator_mail_logs` の保持期間は運用に応じて上限を設け、古いログはアーカイブ / 削除方針を別途定義。
+    - `op_mail_training_samples` は、必要に応じて匿名化・伏字を検討（直接本名を学習に使わないなど）。
 
 ---
 
 ## 9. CRON_SYS との関係
 
-- OP_MAIL 自体は cron ではなく Push トリガで動作する。
-- ただし、以下のような二次的な監視ジョブを CRON_SYS に追加する余地はある（任意）:
+- OP_MAIL 自体は cron ではなく **Push トリガ** で動作する。
+- ただし、以下のような二次的ヘルスチェックジョブを CRON_SYS に追加する余地はある（任意）:
     - `op_mail_health_check`:
-        - `operator_mail_logs.status='error'` や、
-            
-            `received_at` から一定時間経っても `ticket_id` が NULL のレコードを検知し、
-            
-            HQ にアラートする。
-            
+        - `status='error'` のログや、
+        - `received_at` から一定時間経過しても `ticket_created` になっていないレコードを検知し、HQ にアラートする。
 - SLA 追撃（SMS / ChatWork）は、既存の `cron_sms_followup.php` 等のロジックを流用し、
     
-    `source='operator_mail'` かつ `category='operator_mail.follow_high'` 等も対象に含める。
+    `source='operator_mail'` かつ `category like 'operator_mail.follow_%'` も対象に含める。
     
 
 ---
@@ -567,24 +534,26 @@ CREATE TABLE op_mail_training_samples (
         
         embedding + 近傍検索による few-shot 提供。
         
+- STORES予約と OP_MAIL の ID 連携を強化し、
+    
+    将来的に OP メール側に STORES 会員番号を直接埋め込むフロー（今回の仕様はその前段として設計）。
+    
 
 ---
 
-## 11. Phase7 から他フェーズへの差分まとめ
+## 11. 他フェーズへの差分まとめ
 
 - PHASE_00_DB_CORE:
     - `tickets.source` enum に `'operator_mail'` を追加する。
-    - 新テーブル `operator_mail_logs`, `op_mail_training_samples` を DB_CORE に編入。
+    - 新テーブル `operator_mail_logs`, `op_mail_training_samples` を DB_CORE に編入する。
 - PHASE_04_SHOP_PORTAL:
     - OP_MAIL チケット詳細画面に:
-        - メール原文表示
-        - 顧客特定パネル（会員番号入力 → API 照合）
+        - 電話代行報告メール全文表示
+        - 顧客特定パネル（会員番号 / 予約ID 入力 → API 照合）
         - 「LINEで返信」「メールで返信」「対応不要で完了」ボタン
         - 解決済みログの履歴カード表示
 - PHASE_05_AI_INBOX:
     - `source='operator_mail'` チケットに対するフィルタ / バッジ表示。
-    - close_reason `'op_mail_resolved_before'` の表示文言。
+    - `close_reason='op_mail_resolved_before'` の表示文言（「店舗判断で対応不要」など）。
 - AI_CORE:
-    - `channel='op_mail'` 用 classification スキーマを本仕様に合わせて実装。
-
-以上。
+    - `channel='op_mail'` 用 classification スキーマを本仕様に合わせて実装する。
